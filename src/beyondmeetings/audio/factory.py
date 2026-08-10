@@ -10,8 +10,6 @@ from pathlib import Path
 
 from .base import Recorder
 
-SPEC = "docs/superpowers/specs/2026-08-10-macos-support-design.md"
-
 
 class UnsupportedPlatformError(RuntimeError):
     """No capture backend exists for this operating system."""
@@ -30,11 +28,9 @@ def build_recorder(
         return PipeWireRecorder(data_dir, segment_minutes=segment_minutes)
 
     if platform == "darwin":
-        raise UnsupportedPlatformError(
-            "beyondMeetings cannot record on macOS yet — recording needs "
-            "PipeWire, which is Linux-only. macOS support is being built; "
-            f"see {SPEC}."
-        )
+        from .macos import MacRecorder
+
+        return MacRecorder(data_dir, segment_minutes=segment_minutes)
 
     raise UnsupportedPlatformError(
         f"beyondMeetings has no capture backend for {platform}. Recording "

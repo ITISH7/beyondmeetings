@@ -24,10 +24,10 @@ def test_the_linux_backend_is_built_exactly_as_before(tmp_path):
     assert built.state_path == direct.state_path
 
 
-def test_macos_is_rejected_until_its_backend_lands(tmp_path):
-    """Clearer than the status quo, which is `pactl` not found mid-start."""
-    with pytest.raises(UnsupportedPlatformError, match="macOS"):
-        build_recorder(tmp_path, platform="darwin")
+def test_macos_gets_the_mac_backend(tmp_path):
+    from beyondmeetings.audio.macos import MacRecorder
+
+    assert isinstance(build_recorder(tmp_path, platform="darwin"), MacRecorder)
 
 
 def test_an_unknown_platform_is_rejected_rather_than_guessed(tmp_path):
