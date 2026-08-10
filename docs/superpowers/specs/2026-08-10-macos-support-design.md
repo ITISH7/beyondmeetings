@@ -28,6 +28,37 @@ cosmetic packaging; it is what makes the permission attach to us and persist.
 
 ---
 
+## Governing constraint: Linux must behave exactly as it does today
+
+macOS is additive. The Linux application keeps working precisely as it does
+now — same behaviour, same code paths, same performance. This outranks every
+other goal in this document, including elegance of the macOS design.
+
+**What that permits.** macOS support is delivered as *new files that Linux
+never imports*. Anything macOS-specific — capture, launcher, doctor checks,
+the Swift helper — is a file a Linux machine never loads.
+
+**What it costs.** Exactly one seam, because two platforms need somewhere to
+diverge: a factory that chooses the backend. Its Linux footprint is four lines
+(one import and one construction in each of `cli.py` and `server.py`), and on
+Linux it returns the same `PipeWireRecorder`, built with the same arguments, as
+the direct construction it replaces.
+
+**How it is enforced**, not merely intended:
+
+1. Every one of the 569 tests that passed at `913def6` must still pass,
+   unmodified. They are the definition of "works exactly as today".
+2. A guard test asserts that importing beyondmeetings on Linux never imports a
+   macOS module — the platform wall is verified, not assumed.
+3. A guard test asserts the factory on Linux yields `PipeWireRecorder` with the
+   same `data_dir` and `segment_minutes` it would have been given directly.
+4. `audio/pipewire.py` — the entire Linux capture backend — is not modified.
+
+The one exception, agreed explicitly: `build_filename_base` moves to
+`audio/base.py` because the `YYYY-MM-DD_HH-MM_slug` convention is shared core
+that the whole pipeline depends on, not Linux capture logic. A re-export stays
+in `pipewire.py`, so every existing import keeps resolving.
+
 ## Decisions
 
 | Decision | Choice | Rationale |
@@ -133,8 +164,14 @@ failure mid-meeting. All three move onto the interface.
 
 ### `MacRecorder`
 
-Takes the same injected `runner` as `PipeWireRecorder`, so it is driven by the
-existing `FakeRunner` pattern and the entire Python side is testable on Linux.
+Lives in a new `audio/macos.py`. Linux never imports it — the factory's
+`darwin` branch is the only reference, and that import sits inside the branch.
+
+It takes an injected `runner` of the same shape as `PipeWireRecorder`'s, so it
+is driven by the existing `FakeRunner` pattern and the whole Python side is
+testable on Linux. It defines that runner itself rather than importing
+`SubprocessRunner` from `pipewire.py`: eight trivial lines are a better trade
+than a macOS backend reaching into the Linux one.
 
 Segment rollover, with one ordering detail that matters:
 
@@ -170,19 +207,20 @@ it stays, documented as Linux-only.
 `NSMicrophoneUsageDescription` is mandatory: without it the process is killed
 outright on first mic access, not merely denied.
 
-### `desktop.py` becomes a package
+### A separate macOS launcher module — `desktop.py` is not touched
 
-It currently mixes platform-neutral logic (`open_app`, `server_is_running`,
-`resolve_executable`) with the freedesktop `.desktop` template. Split into
-`desktop/{base,linux,macos}.py`, with `__init__.py` re-exporting the public
-names so existing imports such as `from .desktop import DEFAULT_PORT, open_app`
-keep working untouched.
+An earlier revision of this design split `desktop.py` into a
+`desktop/{base,linux,macos}.py` package. **That is rejected.** It restructures
+working Linux code — freshly fixed in PR #2 — to make room for a file that does
+not exist yet, which the governing constraint forbids.
 
-> **Sequencing hazard.** As of 2026-08-10 there is uncommitted work in progress
-> on `desktop.py` — `tests/test_desktop.py` contains a red-phase TDD suite for a
-> refactor (`wait_until`, `ready`/`reporter`/`cancelled` parameters,
-> `browser_check`) whose implementation is not yet written; 10 tests fail. That
-> refactor must land before this split begins, or the two will conflict badly.
+Instead, macOS packaging lives in a new `desktop_macos.py`. It imports the two
+platform-neutral helpers it needs (`resolve_executable`, `APP_ID`) from
+`desktop.py` and adds `install_app_bundle()` / `remove_app_bundle()` alongside.
+`desktop.py` itself is unchanged, and Linux never imports `desktop_macos`.
+
+The duplication this costs is near zero: the `.desktop` writer and the `.app`
+bundle writer share nothing but a path helper and a constant.
 
 ### Build
 
@@ -235,11 +273,24 @@ via the existing injected-runner seam:
   ordering, SIGTERM stop;
 - a parametrized test asserting **both** recorders satisfy the full `Recorder`
   ABC — the test that would have caught the `roll_segment` gap;
-- factory dispatch, with `sys.platform` monkeypatched both ways;
+- factory dispatch, selected by an injected `platform` argument rather than a
+  monkeypatched `sys.platform`, so no test can leak a patched global into the
+  next one;
 - doctor checks driven by a mocked `check-permissions` JSON payload;
 - bundle generation into `tmp_path`, asserting `Info.plist` parses via
-  `plistlib` and carries `NSMicrophoneUsageDescription`;
-- an import guard: `audio.factory` on Linux must not pull in macOS-only modules.
+  `plistlib` and carries `NSMicrophoneUsageDescription`.
+
+**Regression guards for the governing constraint** — these exist solely to
+prove Linux is unaffected, and are the tests to run first if anything is ever
+suspected of drifting:
+
+- importing `beyondmeetings.cli` on Linux loads no macOS module;
+- `audio.factory` imports no backend at module scope — each is imported inside
+  its own branch;
+- on Linux the factory returns `PipeWireRecorder` carrying the same `data_dir`
+  and `segment_minutes` the direct construction gave it;
+- `build_filename_base` remains importable from `audio.pipewire`, so no
+  existing import path breaks.
 
 **Requires CI on macOS** — a GitHub Actions `macos-14` runner compiles
 `bmcapture` and confirms `check-permissions --json` runs and emits valid JSON.
@@ -255,15 +306,23 @@ grant TCC. A green CI badge must not be read as covering this.
 
 | # | Phase | Where | Gate |
 |---|---|---|---|
-| 1 | **Spike** — throwaway Swift; answer TCC attribution, confirm SCK audio-only on 13 | Mac, manual | blocks everything |
-| 2 | **Platform-neutral refactor** — ABC tightening, `audio/factory.py`, `desktop/` split | Linux, fully tested | needs the in-flight `desktop.py` work landed first |
-| 3 | **Swift helper + build** — `bmcapture.swift`, `swiftc` in `install.sh`, CI job | Mac + CI | after 1 |
-| 4 | **`MacRecorder`** — Python side | Linux, fully tested | after 2, 3 |
-| 5 | **Packaging + doctor** — `.app` bundle, permission checks, brew, LaunchAgent | Linux-testable, Mac-verified | after 4 |
-| 6 | **Docs** — README requirements table, macOS install steps | — | after 5 |
+| # | Phase | Linux footprint | Where | Gate |
+|---|---|---|---|---|
+| 1 | **Spike** — throwaway Swift; answer TCC attribution, confirm SCK audio-only on 13 | none | Mac, manual | blocks 3–5 |
+| 2 | **The seam** — `audio/factory.py`, move `build_filename_base`, guard tests | 4 lines + 1 re-export | Linux, fully tested | none |
+| 3 | **Swift helper + build** — `bmcapture.swift`, `swiftc` in `install.sh`, CI job | none (new files, `uname -s` guard) | Mac + CI | after 1 |
+| 4 | **`MacRecorder`** — `audio/macos.py` | none (new file) | Linux, fully tested | after 1, 2 |
+| 5 | **Packaging + doctor** — `desktop_macos.py`, permission checks, brew, LaunchAgent | none (new files) | Linux-testable, Mac-verified | after 4 |
+| 6 | **Docs** — README requirements table, macOS install steps | none | — | after 5 |
 
-Phase 2 is worth landing regardless of whether macOS ever ships: it closes an
-interface gap that exists today.
+Phase 2 already landed the `Recorder` ABC tightening (commit `80708b2`), which
+closes an interface gap that existed regardless of macOS: `roll_segment`,
+`reset` and `state_error` were called by the app but undeclared, and removing
+the `getattr` that hid this immediately exposed a test fake that had drifted
+from the interface. Zero behaviour change on Linux; 577 tests green.
+
+Phases 3–6 add only new files. After phase 2 there is no further Linux
+footprint anywhere in this design.
 
 ---
 
