@@ -63,8 +63,12 @@ python_is_usable() {
   return 1
 }
 
+OS="$(uname -s)"
+
 venv_hint() {
-  if command -v apt-get >/dev/null 2>&1; then
+  if [ "$OS" = "Darwin" ]; then
+    echo "xcode-select --install   # or: brew install python"
+  elif command -v apt-get >/dev/null 2>&1; then
     echo "sudo apt-get install -y python3-venv python3-pip"
   elif command -v dnf >/dev/null 2>&1; then
     echo "sudo dnf install -y python3 python3-pip"
@@ -152,11 +156,59 @@ case ":$PATH:" in
   *) say "Note: $BIN_DIR is not on your PATH — add it to your shell profile." ;;
 esac
 
-# Install the app icon so beyondMeetings appears in the applications menu.
-"$PREFIX/venv/bin/python" -c "
+if [ "$OS" = "Darwin" ]; then
+  # macOS keys privacy permissions per bundle identifier, so recording needs a
+  # real .app — a bare command in ~/.local/bin has no identity of its own and
+  # its grants would attach to the terminal instead.
+  SWIFT_SRC="$("$PREFIX/venv/bin/python" -c "
+from pathlib import Path
+import beyondmeetings
+print(Path(beyondmeetings.__file__).parent / 'native' / 'bmcapture.swift')
+")"
+
+  HELPER=""
+  if ! command -v swiftc >/dev/null 2>&1; then
+    say "Xcode command line tools not found — skipping the capture helper."
+    say "Run 'xcode-select --install', then re-run this installer to record."
+  elif [ ! -f "$SWIFT_SRC" ]; then
+    say "Capture helper source missing from the install — skipping."
+  else
+    say "Building the audio capture helper…"
+    if swiftc -O "$SWIFT_SRC" -o "$PREFIX/bmcapture" \
+        -framework ScreenCaptureKit \
+        -framework AVFoundation \
+        -framework CoreMedia 2>"$PREFIX/bmcapture-build.log"; then
+      HELPER="$PREFIX/bmcapture"
+      say "Capture helper built"
+    else
+      say "Capture helper failed to build — see $PREFIX/bmcapture-build.log"
+      say "Everything except recording will still work."
+    fi
+  fi
+
+  "$PREFIX/venv/bin/python" -c "
+import sys
+from pathlib import Path
+from beyondmeetings.desktop_macos import install_app_bundle
+helper = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] else None
+bundle = install_app_bundle(helper=Path(helper) if helper else None)
+print(bundle)
+" "$HELPER" >/dev/null 2>&1 && say "App installed to ~/Applications/beyondMeetings.app"
+
+  if [ -n "$HELPER" ]; then
+    echo
+    say "One-time permissions: open the app, then allow beyondMeetings under"
+    say "System Settings → Privacy & Security → Screen Recording (this is how"
+    say "macOS delivers the other participants' audio) and → Microphone."
+    say "macOS needs the app reopened after granting screen recording."
+  fi
+else
+  # Install the app icon so beyondMeetings appears in the applications menu.
+  "$PREFIX/venv/bin/python" -c "
 from beyondmeetings.desktop import install_desktop_entry
 install_desktop_entry()
 " >/dev/null 2>&1 && say "App icon added to your applications"
+fi
 
 echo
 if "$PREFIX/venv/bin/python" -c "
