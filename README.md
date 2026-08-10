@@ -1,11 +1,95 @@
 # BeyondMeetings
 
-Record a meeting, get structured notes in Obsidian. Locally, on Linux.
+**Record a meeting, get structured notes in Obsidian. On your own machine.**
 
-beyondMeetings captures every voice on the call, transcribes it, and writes a
-meeting note with an executive summary, decisions, action items and open
-questions — then adds the action items to a task board, updates a dashboard,
-and links follow-up meetings into chains.
+beyondMeetings captures every voice on the call — not just your microphone —
+transcribes it, and writes a meeting note with an executive summary, decisions,
+action items and open questions. Then it adds the action items to a task board,
+updates a dashboard, and links follow-up meetings into chains.
+
+No meeting bot joins your call. No SaaS account. Your notes are plain markdown
+files in a folder you already own.
+
+```
+   Start                                                          Stop
+     |                                                              |
+     v                                                              v
+  ┌──────────────────────────────────────────────────────────────────┐
+  │  every audio source on the machine, mixed into one recording     │
+  └──────────────────────────────────────────────────────────────────┘
+                                    |
+             transcribe -> analyse -> write
+                                    |
+     ┌──────────────┬───────────────┴───────────────┬──────────────┐
+     v              v                               v              v
+  Meeting note   Task board                     Dashboard     Follow-up
+  with summary   entries with                   kept in       chain linked
+  and actions    owners and dates               sync          both ways
+```
+
+## How it works
+
+```mermaid
+flowchart TB
+    subgraph capture["Capture — the only platform-specific part"]
+        direction LR
+        L["Linux<br/>PipeWire null sink"]
+        M["macOS<br/>ScreenCaptureKit + AVFoundation"]
+    end
+
+    capture --> SEG["Segmented recording<br/>50-minute chunks"]
+    SEG --> TR["Transcription<br/>Groq Whisper or local whisper.cpp"]
+    TR --> AI["Analysis<br/>Claude / ChatGPT / Gemini / Ollama"]
+    AI --> W["Deterministic writers"]
+
+    W --> N["Meeting note"]
+    W --> T["Task board"]
+    W --> H["Dashboard"]
+    W --> F["Follow-up links"]
+
+    style capture fill:#1f2937,stroke:#4b5563,color:#f9fafb
+    style W fill:#1e3a5f,stroke:#2563eb,color:#f9fafb
+```
+
+Two things in that diagram matter more than the rest.
+
+**Capture is the only platform-specific part.** Everything downstream —
+transcription, analysis, and every file written — is the same code on every
+platform. A backend is selected once, at startup, and nothing else in the
+system knows which one it got.
+
+**The files are written by deterministic code, not by the model.** The model
+decides *what the meeting was about*; Python decides what the markdown looks
+like. Swapping providers changes summary quality, never structure or
+correctness.
+
+### Long meetings
+
+Recording rolls over into a fresh segment every 50 minutes, and each closed
+segment is transcribed in the background *while the next one records*.
+
+```mermaid
+gantt
+    title A three-hour meeting, transcribed as it happens
+    dateFormat HH:mm
+    axisFormat %H:%M
+
+    section Recording
+    Segment 1     :a1, 00:00, 50m
+    Segment 2     :a2, after a1, 50m
+    Segment 3     :a3, after a2, 50m
+    Segment 4     :a4, after a3, 30m
+
+    section Transcribing
+    Segment 1     :b1, 00:50, 6m
+    Segment 2     :b2, 01:40, 6m
+    Segment 3     :b3, 02:30, 6m
+    Segment 4     :b4, 03:00, 4m
+```
+
+By the time you press Stop, almost everything is already done — and the
+transcription API is never handed hours of audio at once, which is what keeps a
+long meeting under rate limits.
 
 ## Installation
 
@@ -31,8 +115,13 @@ curl -fsSL https://cdn.jsdelivr.net/gh/nikhilm55/beyondmeetings@main/install.sh 
 ```
 
 It checks your system, installs into `~/.local/share/beyondmeetings-app`, adds
-a `beyondmeetings` command to `~/.local/bin`, puts an app icon in your
-applications menu, and opens the setup wizard.
+a `beyondmeetings` command to `~/.local/bin`, installs an app icon, and opens
+the setup wizard.
+
+On **macOS** the same command additionally compiles the capture helper and
+assembles `~/Applications/beyondMeetings.app` — see
+[macOS](#macos) first, because it needs the Xcode command line tools and has
+not yet been verified on real hardware.
 
 **Step 2 — finish the wizard.** It opens at `http://127.0.0.1:7788/setup`
 automatically. Work down the checklist until the ring reads 100%:
@@ -79,41 +168,118 @@ Same command. Your settings, keys and recordings are left alone.
 
 ---
 
-### Long meetings
-
-Recording rolls over into fresh segments every 50 minutes, and each closed
-segment is transcribed in the background *while the next one records*. By the
-time you hit Stop, almost everything is already done — and the transcription
-API is never handed hours of audio in one burst. A five-hour meeting works.
-
----
-
 ## What you get
 
-For every meeting, a note at `Meetings/YYYY-MM-DD/[Title].md`:
+For every meeting, a note at `Meetings/YYYY-MM-DD/[Title].md`. This is real
+output from the renderer, not a mock-up:
 
-- **Executive summary**, decisions, action items with owners and due dates,
-  open questions, risks, and discussion points
-- **Follow-up chains** — if a meeting continues an earlier one, both notes are
-  linked, in both directions
-- **Task board** entries for every action item, with priorities and back-links
-- **Dashboard** kept in sync automatically
+```markdown
+---
+tags:
+  - meeting
+  - authentitas
+  - payments
+date: 2026-08-07
+attendees:
+  - Nikhil
+  - Mayank
+  - Priya
+follow_up_of: "[[Meetings/2026-08-04/Payments API - Kickoff]]"
+---
 
-The title is derived from what was actually discussed, so you never have to
-name a meeting before it starts.
+# Payments API — Integration Review
+
+> [!note]- Follow-up to
+> [[Meetings/2026-08-04/Payments API - Kickoff]]
+
+## Executive Summary
+The team walked through the sandbox integration ahead of Thursday. Token
+refresh is the one open risk: the current implementation retries on a 401
+without checking whether the refresh itself failed, which can loop. Priya will
+cap it. Everything else is on track for the demo.
+
+## Decisions Made
+- Ship the sandbox integration behind a feature flag rather than delaying the demo.
+- Refresh tokens cap at three attempts, then surface a re-auth prompt.
+
+## Action Items
+- [ ] **Cap token refresh retries at three** — **Priya** · Due: 2026-08-09
+- [ ] **Write the webhook replay runbook** — **Mayank**
+- [ ] **Confirm sandbox credentials with the vendor**
+
+## Open Questions
+- Does the vendor rate-limit the sandbox differently from production?
+
+## Risks / Concerns
+- Thursday demo depends on vendor sandbox uptime, which we do not control.
+
+## Discussion
+- Webhook ordering is not guaranteed, so the consumer has to be idempotent.
+- Sandbox latency is roughly double production — noted, not a blocker.
+
+---
+*Transcribed with Groq Whisper · Generated by beyondMeetings (Claude)*
+```
+
+Rendered in Obsidian, the follow-up callout collapses, the action items become
+real checkboxes, and every `[[link]]` is clickable.
+
+### The task board
+
+Every action item also lands on `Tasks/Task Board.md`, with the project, a
+priority inferred from how it was discussed, and a link back to the meeting it
+came from:
+
+```markdown
+> > **==Cap token refresh retries at three==** · `Authentitas` · `HIGH`
+> > Retrying a 401 without checking the refresh result can loop. — **Priya** · Due: 2026-08-09 · [[Meetings/2026-08-07/Payments API - Integration Review]]
+> >
+> > **==Write the webhook replay runbook==** · `Authentitas` · `MEDIUM`
+> > Consumers must be idempotent; document the replay procedure. — **Mayank** · [[Meetings/2026-08-07/Payments API - Integration Review]]
+```
+
+### How it all links together
+
+```mermaid
+flowchart LR
+    K["Kickoff<br/>2026-08-04"]
+    R["Integration Review<br/>2026-08-07"]
+    B["Task Board"]
+    H["Home dashboard"]
+
+    K -->|"Followed up in"| R
+    R -->|"follow_up_of"| K
+    R --> B
+    R --> H
+    B -.->|"back-link"| R
+
+    style K fill:#1e3a5f,stroke:#2563eb,color:#f9fafb
+    style R fill:#1e3a5f,stroke:#2563eb,color:#f9fafb
+    style B fill:#374151,stroke:#6b7280,color:#f9fafb
+    style H fill:#374151,stroke:#6b7280,color:#f9fafb
+```
+
+Follow-ups are detected from what was actually said, not from the meeting name
+— a chain always links to its most recent entry, and both notes are updated so
+the relationship reads correctly from either end.
+
+The title is derived from what was discussed, so you never have to name a
+meeting before it starts. Say "start recording" and deal with the name later.
 
 ---
 
 ## Requirements
 
-**Linux only, today.** Audio capture uses PipeWire, which has no macOS or
-Windows equivalent. See [Platform support](#platform-support) for where macOS
-stands.
+**Linux, or macOS 13+.** See [Platform support](#platform-support) — macOS is
+implemented but has not been verified on real hardware yet, so Linux is the
+one to pick if you want certainty.
 
 You also need:
 
 - **ffmpeg** — the installer offers to install it
+  (`brew install ffmpeg` on macOS)
 - **Obsidian** — the installer offers to install it from Flathub
+  (`brew install --cask obsidian` on macOS)
 - A **Groq API key** for transcription (free tier is ample), *or* local
   whisper.cpp
 - A way to write notes — **your existing Claude/ChatGPT/Gemini subscription
@@ -125,58 +291,107 @@ Run `beyondmeetings doctor` at any time to see what is missing.
 
 ## Platform support
 
-| Platform | Status |
-|---|---|
-| **Linux** (PipeWire) | Supported |
-| **macOS** | Not yet — recording does not work. Design complete, capture backend not built. |
-| **Windows** | Not planned yet |
+| Platform | Capture backend | Status |
+|---|---|---|
+| **Linux** | PipeWire null sink | Supported and in daily use |
+| **macOS 13+** | ScreenCaptureKit + AVFoundation | Implemented, **not yet verified on hardware** |
+| **Windows** | WASAPI loopback would fit | Not started |
 
-### macOS — where it actually stands
+Everything above the capture layer — transcription, analysis, notes, task
+board, dashboard — is shared, so a new platform is one backend and its
+packaging, not a fork.
 
-**Do not install this on a Mac expecting it to record.** `beyondmeetings start`
-will stop with:
+### macOS
 
-> beyondMeetings cannot record on macOS yet — recording needs PipeWire, which
-> is Linux-only.
+**Read this before installing.** The macOS support is complete in the sense
+that every piece exists and the Python side is fully tested. It has **never
+been run on a Mac** — the capture helper is written in Swift and was authored
+without hardware to compile it on. The first person to install it should expect
+to debug the build, and is doing the shakedown run.
 
-That message is deliberate. It replaced a confusing `pactl: not found` failure
-part-way through starting a recording.
+If you want something that is known to work today, use Linux.
 
-**Why it is not a small port.** The Linux recorder builds a PipeWire null sink,
-loops every monitor source plus the microphone into it, and records the mix —
-which is how it captures every participant regardless of which app the call is
-in. macOS has no equivalent primitive. Two further problems make it more than a
-new file:
+#### Why macOS needs more than a new file
 
-- **No single API gives both streams.** On macOS 13–14 system audio comes from
-  ScreenCaptureKit and the microphone from AVFoundation; the unified
-  `captureMicrophone` API is macOS 15+. Both must be captured and mixed.
-- **Permissions need app identity.** macOS keys its privacy grants per *bundle
-  identifier*, and a `pip`-installed CLI has none — grants attach to the
-  terminal instead, and do not carry over when the same code is launched from
-  an app icon. macOS support therefore needs a real `.app` bundle, not just a
-  Python package.
+```mermaid
+flowchart TB
+    subgraph linux["Linux — one API does everything"]
+        P["PipeWire null sink"] --> PM["every app + microphone<br/>mixed into one stream"]
+    end
 
-**What is already done.** The platform seam exists: a factory selects the
-capture backend, so a macOS implementation is a new file the Linux build never
-loads. The full design — capture strategy, packaging, permissions, open risks —
-is written up in
+    subgraph mac["macOS 13-14 — two APIs, mixed afterwards"]
+        S["ScreenCaptureKit<br/>system audio"] --> X["ffmpeg mixes<br/>per segment"]
+        A["AVFoundation<br/>microphone"] --> X
+    end
+
+    style linux fill:#14342b,stroke:#22c55e,color:#f9fafb
+    style mac fill:#3b2f14,stroke:#d97706,color:#f9fafb
+```
+
+macOS has no equivalent of a null sink. System audio comes from
+ScreenCaptureKit, the microphone from AVFoundation, and the two are only
+unified in macOS 15 — below that they must be captured separately and mixed.
+beyondMeetings mixes each 50-minute segment independently, so drift between the
+two device clocks cannot accumulate over a long meeting.
+
+The second problem is permissions. macOS keys privacy grants per *bundle
+identifier*, and a `pip`-installed command has none, so grants would attach to
+your terminal and not carry over to an app icon. That is why the installer
+builds a real `beyondMeetings.app` and puts the capture helper inside it.
+
+#### Installing on macOS
+
+**Requirements:** macOS 13 (Ventura) or later, and the Xcode command line
+tools. The installer compiles the capture helper from source rather than
+shipping a binary, so nothing unsigned has to be trusted.
+
+```bash
+xcode-select --install
+```
+
+Then the same one-liner as Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nikhilm55/beyondmeetings/main/install.sh | bash
+```
+
+It installs into `~/.local/share/beyondmeetings-app`, compiles `bmcapture`,
+and assembles `~/Applications/beyondMeetings.app`. Without the Xcode tools it
+still installs and skips the helper — everything except recording works, and
+re-running the installer afterwards adds it.
+
+**Then grant two permissions.** Open the app once, then in System Settings →
+Privacy & Security:
+
+| Permission | Why | Required |
+|---|---|---|
+| **Screen Recording** | How macOS delivers system audio. Nothing is captured from your screen. | Yes — without it you record only yourself |
+| **Microphone** | Your own voice | No — recording works without it, you are just missing from the transcript |
+
+macOS requires the app to be **reopened** after granting Screen Recording
+before it takes effect. Granting it and seeing no change is expected; quit and
+reopen.
+
+Run `beyondmeetings doctor` at any point — on macOS it checks the Xcode tools,
+the helper, the app bundle, and both permissions, and links straight to the
+right System Settings pane.
+
+#### What to expect on the first run
+
+Honest expectations, given it is unverified:
+
+- The **Swift may not compile first time.** The build log is written to
+  `~/.local/share/beyondmeetings-app/bmcapture-build.log`.
+- **Permission attribution is the main unknown.** Whether macOS attributes the
+  screen-recording grant to the app bundle for both launch paths — the app icon
+  and `beyondmeetings start` in a terminal — could not be determined without
+  hardware. If the terminal path prompts separately, use the app icon.
+- Everything downstream of capture is the same code Linux runs, so if a
+  recording is produced, the notes should be correct.
+
+Bug reports from a real Mac are the single most useful contribution right now.
+The design, including the open questions, is written up in
 [`docs/superpowers/specs/2026-08-10-macos-support-design.md`](docs/superpowers/specs/2026-08-10-macos-support-design.md).
-
-**What is left.** A small Swift capture helper, the `.app` bundle, an installer
-branch, and macOS doctor checks. The first step is a spike on real hardware to
-settle how macOS attributes the screen-recording permission — that answer
-changes the packaging design, and it cannot be determined without a Mac.
-
-Installation instructions for macOS will be added here when recording actually
-works on it, and not before.
-
-**A note on the rest of the pipeline:** transcription, note generation, the
-task board and vault writing contain no platform-specific code. They are
-expected to work anywhere Python does, but they are not tested on macOS and are
-not supported there until the capture backend lands.
-
-Contributions welcome — the design document is the place to start.
 
 ---
 
