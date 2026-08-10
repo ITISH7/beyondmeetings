@@ -45,6 +45,14 @@ def clear_state(path: Path) -> None:
 
 
 class Recorder(ABC):
+    """A capture backend. One implementation per platform.
+
+    Every member here is called by the application: RolloverWorker calls
+    roll_segment() on a timer, SessionManager calls reset() to clear a wedged
+    recording and reads state_error to explain one. Declaring them means a new
+    backend that forgets one fails at construction, not mid-meeting.
+    """
+
     @abstractmethod
     def start(self, name: str) -> RecordingState:
         ...
@@ -56,3 +64,16 @@ class Recorder(ABC):
     @abstractmethod
     def status(self) -> RecordingState | None:
         ...
+
+    @abstractmethod
+    def roll_segment(self) -> str:
+        """End the current segment, start the next. Returns the finished path."""
+
+    @abstractmethod
+    def reset(self) -> None:
+        """Forget a wedged recording. The UI's escape hatch."""
+
+    @property
+    @abstractmethod
+    def state_error(self) -> str | None:
+        """Why the state file was unreadable, or None."""

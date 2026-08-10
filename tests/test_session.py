@@ -1,18 +1,26 @@
 import pytest
 
-from beyondmeetings.audio.base import RecordingState
+from beyondmeetings.audio.base import Recorder, RecordingState
 from beyondmeetings.config import Config
 from beyondmeetings.models import ActionItem, MeetingNote
 from beyondmeetings.session import SessionManager
 from beyondmeetings.vault.scaffold import scaffold_vault
 
 
-class FakeRecorder:
+class FakeRecorder(Recorder):
+    """Subclasses Recorder so the fake cannot drift away from the interface.
+
+    It had: no state_error and no reset, which session.py hid behind a
+    getattr. Inheriting means a missing member fails here, at construction,
+    instead of somewhere downstream during a recording.
+    """
+
     def __init__(self, tmp_path):
         self.tmp_path = tmp_path
         self.state = None
         self.stopped = False
         self._n = 0
+        self._state_error = None
 
     def start(self, name):
         self._n += 1
@@ -37,6 +45,13 @@ class FakeRecorder:
 
     def roll_segment(self):
         return self.state.segments[-1]
+
+    def reset(self):
+        self.state = None
+
+    @property
+    def state_error(self):
+        return self._state_error
 
 
 class FakeTranscriber:

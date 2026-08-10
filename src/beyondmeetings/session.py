@@ -100,7 +100,7 @@ class SessionManager:
                 # A dead ticker or an unreadable state file used to be visible
                 # only in the log — the user found out at stop time.
                 "rollover_error": self._rollover_error,
-                "state_error": getattr(self.recorder, "state_error", None),
+                "state_error": self.recorder.state_error,
             }
 
     # ---------- start ----------
