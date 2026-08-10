@@ -37,3 +37,21 @@ def test_the_linux_backend_satisfies_the_full_interface(tmp_path):
     from beyondmeetings.audio.pipewire import PipeWireRecorder
 
     assert isinstance(PipeWireRecorder(tmp_path), Recorder)
+
+
+# --- the filename convention is shared core, not Linux capture logic ---
+
+def test_filename_base_is_importable_from_base():
+    from beyondmeetings.audio.base import build_filename_base
+
+    assert build_filename_base("Client Kickoff!", "2026-07-30", "14-30") == (
+        "2026-07-30_14-30_client-kickoff"
+    )
+
+
+def test_filename_base_is_still_importable_from_pipewire():
+    """Moving it must not break an existing import path."""
+    from beyondmeetings.audio.base import build_filename_base as from_base
+    from beyondmeetings.audio.pipewire import build_filename_base as from_pipewire
+
+    assert from_pipewire is from_base

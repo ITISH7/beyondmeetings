@@ -14,7 +14,14 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from .base import Recorder, RecordingState, clear_state, load_state, save_state
+from .base import (
+    Recorder,
+    RecordingState,
+    build_filename_base,
+    clear_state,
+    load_state,
+    save_state,
+)
 
 MIX_SINK = "meeting_mix"
 
@@ -27,11 +34,6 @@ class SubprocessRunner:
 
     def spawn(self, args: list[str]) -> int:
         return subprocess.Popen(args).pid
-
-
-def build_filename_base(name: str, day: str, clock: str) -> str:
-    slug = re.sub(r"[^a-z0-9-]", "", name.lower().replace(" ", "-")).strip("-")
-    return f"{day}_{clock}_{slug or 'meeting'}"
 
 
 class PipeWireRecorder(Recorder):

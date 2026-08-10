@@ -10,6 +10,7 @@ Recorder — nothing else changes.
 from __future__ import annotations
 
 import json
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -42,6 +43,12 @@ def load_state(path: Path) -> RecordingState | None:
 
 def clear_state(path: Path) -> None:
     path.unlink(missing_ok=True)
+
+
+def build_filename_base(name: str, day: str, clock: str) -> str:
+    """The `YYYY-MM-DD_HH-MM_slug` convention every backend and path derives from."""
+    slug = re.sub(r"[^a-z0-9-]", "", name.lower().replace(" ", "-")).strip("-")
+    return f"{day}_{clock}_{slug or 'meeting'}"
 
 
 class Recorder(ABC):
