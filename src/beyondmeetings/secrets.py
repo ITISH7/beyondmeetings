@@ -7,8 +7,12 @@ from __future__ import annotations
 
 import logging
 import os
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # pragma: no cover - depends on interpreter
+    import tomli as tomllib
 
 import keyring
 import tomli_w

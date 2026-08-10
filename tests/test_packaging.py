@@ -13,6 +13,11 @@ from pathlib import Path
 
 import pytest
 
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # pragma: no cover - depends on interpreter
+    import tomli as tomllib
+
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ("app.html", "app.css", "app.js", "setup.html", "setup.css", "setup.js")
 
@@ -23,8 +28,6 @@ def test_no_force_include_duplicates_the_package_dir():
     Asserts on parsed TOML, not raw text: a comment explaining the bug would
     otherwise trip a substring check.
     """
-    import tomllib
-
     with (ROOT / "pyproject.toml").open("rb") as fh:
         config = tomllib.load(fh)
 

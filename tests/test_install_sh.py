@@ -80,3 +80,31 @@ def test_bin_dir_is_overridable():
 
 def test_installs_the_app_icon():
     assert "install_desktop_entry" in SCRIPT.read_text()
+
+
+# --- `uv venv` creates an environment with no pip in it ---
+
+def test_uv_venv_is_seeded_with_pip():
+    """The script installs with `python -m pip`, which uv does not provide.
+
+    A bare `uv venv` has no pip, so the fallback path died on
+    'No module named pip' right after uv had done all its work.
+    """
+    line = next(
+        l for l in SCRIPT.read_text().splitlines() if l.strip().startswith("uv venv")
+    )
+    assert "--seed" in line, f"`uv venv` needs --seed to get pip: {line.strip()!r}"
+
+
+def test_seeded_uv_venv_really_has_pip(tmp_path):
+    """Verify the flag against real uv, not just its documentation."""
+    if not shutil.which("uv"):
+        return
+    venv = tmp_path / "venv"
+    proc = subprocess.run(
+        ["uv", "venv", "--seed", str(venv)], capture_output=True, text=True
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (venv / "bin" / "pip").exists(), sorted(
+        p.name for p in (venv / "bin").iterdir()
+    )
