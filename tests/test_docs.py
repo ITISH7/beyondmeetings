@@ -9,8 +9,25 @@ def test_readme_exists_and_shows_the_install_command():
     assert "beyondmeetings start" in text
 
 
-def test_readme_states_the_linux_only_limitation():
-    assert "Linux only" in (ROOT / "README.md").read_text()
+def test_readme_discloses_platform_support():
+    text = (ROOT / "README.md").read_text()
+    assert "Platform support" in text
+    assert "PipeWire" in text, "the Linux capture requirement must be stated"
+
+
+def test_readme_does_not_claim_macos_is_verified():
+    """macOS is implemented but has never been run on a Mac.
+
+    Whoever installs it first is doing the shakedown run, and has to know that
+    before they start rather than after a meeting fails to record. This test
+    exists so the warning cannot quietly disappear in a later edit.
+    """
+    # Normalised: the warning must survive reflowing and bold markers, so the
+    # test checks what it says rather than how it happens to be wrapped.
+    text = " ".join((ROOT / "README.md").read_text().replace("**", "").split())
+
+    assert "not yet verified on hardware" in text
+    assert "never been run on a Mac" in text
 
 
 def test_readme_documents_the_providers():

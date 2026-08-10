@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .audio.pipewire import PipeWireRecorder
+from .audio.factory import build_recorder
 from .config import DEFAULT_CONFIG_PATH, load_config
 from .desktop import (
     DEFAULT_PORT, open_app, open_browser, open_browser_when_ready, wait_until,
@@ -92,7 +92,7 @@ def _session(config, data_dir: Path) -> SessionManager:
     """
     return SessionManager(
         config=config,
-        recorder=PipeWireRecorder(data_dir, segment_minutes=config.segment_minutes),
+        recorder=build_recorder(data_dir, segment_minutes=config.segment_minutes),
         transcriber_factory=build_transcriber,
         provider_factory=build_provider,
     )
