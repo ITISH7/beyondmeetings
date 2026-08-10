@@ -106,10 +106,9 @@ name a meeting before it starts.
 
 ## Requirements
 
-**Linux only.** Audio capture uses PipeWire, which has no macOS or Windows
-equivalent. The capture layer sits behind a single interface
-(`src/beyondmeetings/audio/base.py`) — a port needs one new file and nothing
-else. Contributions very welcome.
+**Linux only, today.** Audio capture uses PipeWire, which has no macOS or
+Windows equivalent. See [Platform support](#platform-support) for where macOS
+stands.
 
 You also need:
 
@@ -121,6 +120,63 @@ You also need:
   is enough**, see below
 
 Run `beyondmeetings doctor` at any time to see what is missing.
+
+---
+
+## Platform support
+
+| Platform | Status |
+|---|---|
+| **Linux** (PipeWire) | Supported |
+| **macOS** | Not yet — recording does not work. Design complete, capture backend not built. |
+| **Windows** | Not planned yet |
+
+### macOS — where it actually stands
+
+**Do not install this on a Mac expecting it to record.** `beyondmeetings start`
+will stop with:
+
+> beyondMeetings cannot record on macOS yet — recording needs PipeWire, which
+> is Linux-only.
+
+That message is deliberate. It replaced a confusing `pactl: not found` failure
+part-way through starting a recording.
+
+**Why it is not a small port.** The Linux recorder builds a PipeWire null sink,
+loops every monitor source plus the microphone into it, and records the mix —
+which is how it captures every participant regardless of which app the call is
+in. macOS has no equivalent primitive. Two further problems make it more than a
+new file:
+
+- **No single API gives both streams.** On macOS 13–14 system audio comes from
+  ScreenCaptureKit and the microphone from AVFoundation; the unified
+  `captureMicrophone` API is macOS 15+. Both must be captured and mixed.
+- **Permissions need app identity.** macOS keys its privacy grants per *bundle
+  identifier*, and a `pip`-installed CLI has none — grants attach to the
+  terminal instead, and do not carry over when the same code is launched from
+  an app icon. macOS support therefore needs a real `.app` bundle, not just a
+  Python package.
+
+**What is already done.** The platform seam exists: a factory selects the
+capture backend, so a macOS implementation is a new file the Linux build never
+loads. The full design — capture strategy, packaging, permissions, open risks —
+is written up in
+[`docs/superpowers/specs/2026-08-10-macos-support-design.md`](docs/superpowers/specs/2026-08-10-macos-support-design.md).
+
+**What is left.** A small Swift capture helper, the `.app` bundle, an installer
+branch, and macOS doctor checks. The first step is a spike on real hardware to
+settle how macOS attributes the screen-recording permission — that answer
+changes the packaging design, and it cannot be determined without a Mac.
+
+Installation instructions for macOS will be added here when recording actually
+works on it, and not before.
+
+**A note on the rest of the pipeline:** transcription, note generation, the
+task board and vault writing contain no platform-specific code. They are
+expected to work anywhere Python does, but they are not tested on macOS and are
+not supported there until the capture backend lands.
+
+Contributions welcome — the design document is the place to start.
 
 ---
 
