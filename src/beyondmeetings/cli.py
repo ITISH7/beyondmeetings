@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import argparse
 import sys
-import webbrowser
 from pathlib import Path
 
 from .audio.pipewire import PipeWireRecorder
 from .config import DEFAULT_CONFIG_PATH, load_config
-from .desktop import DEFAULT_PORT, open_app
+from .desktop import (
+    DEFAULT_PORT, open_app, open_browser, open_browser_when_ready, wait_until,
+)
 from .doctor.base import completion_percent, run_all
 from .doctor.registry import build_checks
 from .llm.factory import MissingKeyError, build_provider
@@ -23,6 +24,13 @@ from .transcribe.factory import build_transcriber
 
 
 AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".ogg", ".opus", ".flac", ".webm"}
+
+# uvicorn's own answer to a port it cannot have is `sys.exit(3)` — no exit
+# code the user sees, and no hint about what to do next.
+BIND_FAILURE = (
+    "Could not start the server on port {port} — something else is already "
+    "using it.\nIf that is beyondMeetings, open it with: beyondmeetings open"
+)
 
 
 def format_doctor_report(rows: list[dict]) -> str:
@@ -153,20 +161,37 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if completion_percent(rows) == 100 else 1
 
     if args.command == "setup":
+        import threading
+
         import uvicorn
 
         from .server import create_app
 
         url = f"http://127.0.0.1:{args.port}/setup"
         print(f"Setup wizard: {url}")
-        if not args.no_browser:
-            webbrowser.open(url)
-        uvicorn.run(
-            create_app(config_path=DEFAULT_CONFIG_PATH),
-            host="127.0.0.1",
-            port=args.port,
-            log_level="warning",
+        server = uvicorn.Server(
+            uvicorn.Config(
+                create_app(config_path=DEFAULT_CONFIG_PATH),
+                host="127.0.0.1",
+                port=args.port,
+                log_level="warning",
+            )
         )
+        stopped = threading.Event()
+        if not args.no_browser:
+            # Opened from a watcher thread — uvicorn has not bound the port yet.
+            open_browser_when_ready(
+                url, ready=lambda: server.started, cancelled=stopped.is_set
+            )
+        try:
+            server.run()
+        except SystemExit as exc:  # uvicorn exits the process on a bind failure
+            if not exc.code:
+                raise
+            print(BIND_FAILURE.format(port=args.port), file=sys.stderr)
+            return 1
+        finally:
+            stopped.set()
         return 0
 
     if args.command == "open":
@@ -198,10 +223,19 @@ def main(argv: list[str] | None = None) -> int:
         )
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
-        print(f"beyondMeetings: {url}")
 
+        # thread.start() returns long before uvicorn is accepting connections —
+        # and, if the port is taken, before it has given up. uvicorn's
+        # sys.exit() only kills this thread, so without the check `serve`
+        # printed the URL, opened nothing and exited 0.
+        wait_until(lambda: server.started or not thread.is_alive())
+        if not server.started:
+            print(BIND_FAILURE.format(port=args.port), file=sys.stderr)
+            return 1
+
+        print(f"beyondMeetings: {url}")
         if not args.no_browser:
-            webbrowser.open(url)
+            open_browser(url)
 
         if args.no_tray or not tray_available():
             if not args.no_tray:

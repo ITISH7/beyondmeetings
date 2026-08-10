@@ -132,3 +132,168 @@ def test_check_reports_missing_then_ok(tmp_path):
 
 def test_check_is_optional(tmp_path):
     assert DesktopLauncherCheck(Config(), home=tmp_path).required is False
+
+
+# --- The in-process servers (`setup`, `serve`) raced the browser ---
+
+URL = "http://127.0.0.1:7788/setup"
+
+
+def test_open_browser_when_ready_waits_before_opening():
+    """A browser told to navigate before uvicorn binds gets ERR_CONNECTION_REFUSED."""
+    from beyondmeetings.desktop import open_browser_when_ready
+
+    order = []
+    open_browser_when_ready(
+        URL,
+        ready=lambda: order.append("ready") or True,
+        opener=lambda url: order.append("open") or True,
+    ).join(timeout=5)
+    assert order == ["ready", "open"]
+
+
+def test_open_browser_when_ready_gives_up_if_the_server_never_starts():
+    """Better no tab at all than a tab showing a connection error."""
+    from beyondmeetings.desktop import open_browser_when_ready
+
+    opened, reported = [], []
+    open_browser_when_ready(
+        URL, ready=lambda: False, timeout=0.05,
+        opener=opened.append, reporter=reported.append,
+    ).join(timeout=5)
+    assert opened == []
+    assert reported, "giving up silently leaves the user staring at nothing"
+    assert URL in reported[0], "the message must say where to go instead"
+
+
+def test_open_browser_when_ready_says_so_when_no_browser_could_be_opened():
+    from beyondmeetings.desktop import open_browser_when_ready
+
+    reported = []
+    open_browser_when_ready(
+        URL, ready=lambda: True, opener=lambda url: False, reporter=reported.append,
+    ).join(timeout=5)
+    assert reported and URL in reported[0]
+
+
+def test_open_browser_when_ready_stops_waiting_once_the_server_is_gone():
+    """A server that failed to bind is never coming up — do not wait out the timeout."""
+    from beyondmeetings.desktop import open_browser_when_ready
+
+    opened, reported = [], []
+    thread = open_browser_when_ready(
+        URL, ready=lambda: False, timeout=60, cancelled=lambda: True,
+        opener=opened.append, reporter=reported.append,
+    )
+    thread.join(timeout=5)
+    assert not thread.is_alive(), "the watcher outlived the server it was waiting for"
+    assert opened == [] and reported == []
+
+
+def test_open_browser_when_ready_does_not_block_the_caller():
+    """The caller's next move is uvicorn.run — the wait cannot happen first."""
+    import threading
+
+    from beyondmeetings.desktop import open_browser_when_ready
+
+    released = threading.Event()
+    thread = open_browser_when_ready(
+        URL, ready=released.is_set, opener=lambda url: True,
+    )
+    assert thread.is_alive(), "waiting must happen off the calling thread"
+    released.set()
+    thread.join(timeout=5)
+
+
+def test_wait_until_returns_as_soon_as_the_predicate_holds():
+    import time
+
+    from beyondmeetings.desktop import wait_until
+
+    started = time.monotonic()
+    assert wait_until(lambda: True, timeout=30) is True
+    assert time.monotonic() - started < 1
+
+
+def test_wait_until_gives_up_at_the_timeout():
+    from beyondmeetings.desktop import wait_until
+
+    assert wait_until(lambda: False, timeout=0.05) is False
+
+
+# --- The browser's own stderr was being printed as if it were ours ---
+
+def test_open_browser_discards_the_browsers_output():
+    """Chromium logs a zygote 'Broken pipe' on exit; inherited, it reads as our crash."""
+    import subprocess
+
+    from beyondmeetings.desktop import open_browser
+
+    calls = []
+    assert open_browser(URL, spawn=lambda *a, **kw: calls.append((a, kw)),
+                        browser_check=lambda: None) is True
+    (argv,), kwargs = calls[0]
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
+    assert URL in argv
+
+
+def test_open_browser_survives_a_browser_that_cannot_be_launched():
+    from beyondmeetings.desktop import open_browser
+
+    def boom(*a, **kw):
+        raise OSError("no such file")
+
+    assert open_browser(URL, spawn=boom, browser_check=lambda: None) is False
+
+
+def test_open_browser_reports_when_there_is_no_browser_at_all():
+    """`webbrowser.open` returned False here; a fire-and-forget child cannot.
+
+    Headless boxes and SSH sessions have no browser, and the caller has to be
+    able to tell — otherwise it claims a tab was opened that never was.
+    """
+    import webbrowser
+
+    from beyondmeetings.desktop import open_browser
+
+    spawned = []
+
+    def no_browser():
+        raise webbrowser.Error("could not locate runnable browser")
+
+    assert open_browser(URL, spawn=spawned.append, browser_check=no_browser) is False
+    assert spawned == [], "nothing to hand the URL to — do not spawn a child"
+
+
+def test_open_browser_really_reaches_the_browser(tmp_path, monkeypatch):
+    """End-to-end: catches a wrong child-process invocation, which mocks cannot.
+
+    BROWSER runs the *interpreter* rather than a shell script directly: a file
+    under /tmp is not executable on a `noexec` mount, and `webbrowser` reacts
+    to a browser it cannot launch by silently trying the next one it knows —
+    which on a developer machine means really opening their real browser.
+    """
+    import sys
+    import time
+    import webbrowser
+
+    from beyondmeetings.desktop import open_browser
+
+    marker = tmp_path / "opened.txt"
+    fake = tmp_path / "fake_browser.py"
+    fake.write_text(
+        "import pathlib, sys\n"
+        f"pathlib.Path({str(marker)!r}).write_text(sys.argv[1])\n"
+    )
+    monkeypatch.setenv("BROWSER", f"{sys.executable} {fake} %s")
+    # BROWSER is read once per process, on first use — which may already have
+    # happened in another test.
+    monkeypatch.setattr(webbrowser, "_tryorder", None)
+
+    assert open_browser(URL) is True
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline and not marker.exists():
+        time.sleep(0.05)
+    assert marker.exists(), "the child interpreter never handed the URL over"
+    assert marker.read_text() == URL
