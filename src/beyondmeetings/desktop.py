@@ -12,8 +12,8 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
-import webbrowser
 from pathlib import Path
 
 DEFAULT_PORT = 7788
@@ -85,6 +85,60 @@ def wait_for_server(port: int = DEFAULT_PORT, timeout: float = STARTUP_TIMEOUT) 
     return False
 
 
+def open_browser(url: str, spawn=None) -> bool:
+    """Hand `url` to the browser without inheriting the browser's own output.
+
+    `webbrowser.open` starts the browser with our stdout and stderr, so
+    anything it prints looks like it came from us. A Chromium launched while
+    an instance is already running forwards the URL, prints "Opening in
+    existing browser session." and exits at once — and on the way out logs
+    `ERROR:content/zygote/zygote_linux.cc:662] write: Broken pipe (32)`.
+    That is harmless browser teardown noise, but printed in the middle of
+    `install.sh` it reads as beyondMeetings crashing. Going through a child
+    interpreter lets those two descriptors point at /dev/null instead.
+    """
+    spawn = spawn or subprocess.Popen
+    try:
+        spawn(
+            [sys.executable, "-m", "webbrowser", url],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        return False
+    return True
+
+
+def open_browser_when_ready(
+    url: str,
+    port: int = DEFAULT_PORT,
+    timeout: float = STARTUP_TIMEOUT,
+    opener=None,
+    waiter=None,
+) -> threading.Thread:
+    """Open `url` from a watcher thread, once something answers on `port`.
+
+    `setup` and `serve` run the server in this process and block in uvicorn,
+    so there is no moment between "socket bound" and "blocked" at which to
+    open the browser — both used to open it first and hope. That is a race
+    the browser wins whenever it is already running: it navigates in
+    milliseconds and lands on ERR_CONNECTION_REFUSED while uvicorn is still
+    binding, which is why this only showed up on some machines (a browser
+    that has to cold-start takes seconds and loses the race). `open_app`
+    already waits for the port before opening; this is the same rule for the
+    servers that run in-process.
+    """
+    def watch() -> None:
+        if (waiter or wait_for_server)(port, timeout):
+            (opener or open_browser)(url)
+
+    thread = threading.Thread(target=watch, name="open-browser", daemon=True)
+    thread.start()
+    return thread
+
+
 def launch_server(port: int = DEFAULT_PORT, log_dir: Path | None = None) -> int:
     """Start the server detached, so it outlives the launcher process."""
     log_dir = Path(log_dir or Path.home() / ".local" / "share" / APP_ID)
@@ -103,7 +157,7 @@ def launch_server(port: int = DEFAULT_PORT, log_dir: Path | None = None) -> int:
 
 def open_app(
     port: int = DEFAULT_PORT,
-    opener=webbrowser.open,
+    opener=open_browser,
     launcher=launch_server,
     waiter=wait_for_server,
 ) -> str:

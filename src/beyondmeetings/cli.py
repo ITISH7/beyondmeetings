@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import argparse
 import sys
-import webbrowser
 from pathlib import Path
 
 from .audio.pipewire import PipeWireRecorder
 from .config import DEFAULT_CONFIG_PATH, load_config
-from .desktop import DEFAULT_PORT, open_app
+from .desktop import DEFAULT_PORT, open_app, open_browser_when_ready
 from .doctor.base import completion_percent, run_all
 from .doctor.registry import build_checks
 from .llm.factory import MissingKeyError, build_provider
@@ -160,7 +159,8 @@ def main(argv: list[str] | None = None) -> int:
         url = f"http://127.0.0.1:{args.port}/setup"
         print(f"Setup wizard: {url}")
         if not args.no_browser:
-            webbrowser.open(url)
+            # Opened from a watcher thread — uvicorn has not bound the port yet.
+            open_browser_when_ready(url, args.port)
         uvicorn.run(
             create_app(config_path=DEFAULT_CONFIG_PATH),
             host="127.0.0.1",
@@ -201,7 +201,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"beyondMeetings: {url}")
 
         if not args.no_browser:
-            webbrowser.open(url)
+            # thread.start() returns long before uvicorn is accepting connections.
+            open_browser_when_ready(url, args.port)
 
         if args.no_tray or not tray_available():
             if not args.no_tray:

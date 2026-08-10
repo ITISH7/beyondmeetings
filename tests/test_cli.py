@@ -149,3 +149,86 @@ def test_stop_reports_progress_instead_of_sitting_silent(monkeypatch, tmp_path,
     monkeypatch.setattr(cli, "_session", lambda c, d: FakeSession())
     cli.main(["stop"])
     assert "Transcribing segment 1 of 1" in capsys.readouterr().out
+
+
+# --- `setup`/`serve` handed the URL over before the server was listening ---
+
+def _browser_race_probe(monkeypatch, tmp_path):
+    """Records whether the browser was opened while the port was still closed."""
+    import threading
+
+    from beyondmeetings import cli, desktop, server
+    from beyondmeetings.config import Config
+
+    listening = threading.Event()
+    opened, opened_too_early = [], []
+
+    def fake_open(url):
+        if not listening.is_set():
+            opened_too_early.append(url)
+        opened.append(url)
+        return True
+
+    monkeypatch.setattr(cli, "load_config", lambda: Config(data_dir=str(tmp_path)))
+    monkeypatch.setattr(server, "create_app", lambda **kw: object())
+    monkeypatch.setattr(desktop, "open_browser", fake_open)
+    monkeypatch.setattr(desktop, "wait_for_server",
+                        lambda port, timeout=0: listening.wait(10))
+    return listening, opened, opened_too_early
+
+
+def _settle(opened, listening):
+    """Stand in for a server that stays up: bound, then serving."""
+    import time
+
+    listening.set()
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not opened:
+        time.sleep(0.01)
+
+
+def test_setup_opens_the_browser_only_once_the_port_answers(monkeypatch, tmp_path):
+    """An already-running browser navigates in milliseconds and beat uvicorn's bind."""
+    import uvicorn
+
+    from beyondmeetings import cli
+
+    listening, opened, too_early = _browser_race_probe(monkeypatch, tmp_path)
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: _settle(opened, listening))
+
+    assert cli.main(["setup", "--port", "7788"]) == 0
+    assert opened == ["http://127.0.0.1:7788/setup"]
+    assert too_early == [], "browser was sent to a port nothing was listening on"
+
+
+def test_setup_honours_no_browser(monkeypatch, tmp_path):
+    import uvicorn
+
+    from beyondmeetings import cli
+
+    listening, opened, _ = _browser_race_probe(monkeypatch, tmp_path)
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: listening.set())
+    assert cli.main(["setup", "--port", "7788", "--no-browser"]) == 0
+    assert opened == []
+
+
+def test_serve_opens_the_browser_only_once_the_port_answers(monkeypatch, tmp_path):
+    import uvicorn
+
+    from beyondmeetings import cli
+
+    listening, opened, too_early = _browser_race_probe(monkeypatch, tmp_path)
+
+    class FakeServer:
+        def __init__(self, config):
+            pass
+
+        def run(self):
+            _settle(opened, listening)
+
+    monkeypatch.setattr(uvicorn, "Config", lambda app, **kw: object())
+    monkeypatch.setattr(uvicorn, "Server", FakeServer)
+
+    assert cli.main(["serve", "--port", "7788", "--no-tray"]) == 0
+    assert opened == ["http://127.0.0.1:7788/"]
+    assert too_early == [], "browser was sent to a port nothing was listening on"

@@ -132,3 +132,98 @@ def test_check_reports_missing_then_ok(tmp_path):
 
 def test_check_is_optional(tmp_path):
     assert DesktopLauncherCheck(Config(), home=tmp_path).required is False
+
+
+# --- The in-process servers (`setup`, `serve`) raced the browser ---
+
+def test_open_browser_when_ready_waits_before_opening():
+    """A browser told to navigate before uvicorn binds gets ERR_CONNECTION_REFUSED."""
+    from beyondmeetings.desktop import open_browser_when_ready
+
+    order = []
+    open_browser_when_ready(
+        "http://127.0.0.1:7788/setup",
+        port=7788,
+        waiter=lambda port, timeout: order.append("wait") or True,
+        opener=lambda url: order.append("open"),
+    ).join(timeout=5)
+    assert order == ["wait", "open"]
+
+
+def test_open_browser_when_ready_gives_up_if_the_port_never_answers():
+    """Better no tab at all than a tab showing a connection error."""
+    from beyondmeetings.desktop import open_browser_when_ready
+
+    opened = []
+    open_browser_when_ready(
+        "http://127.0.0.1:7788/setup",
+        port=7788,
+        waiter=lambda port, timeout: False,
+        opener=opened.append,
+    ).join(timeout=5)
+    assert opened == []
+
+
+def test_open_browser_when_ready_does_not_block_the_caller():
+    """The caller's next move is uvicorn.run — the wait cannot happen first."""
+    import threading
+
+    from beyondmeetings.desktop import open_browser_when_ready
+
+    released = threading.Event()
+    thread = open_browser_when_ready(
+        "http://127.0.0.1:7788/setup",
+        port=7788,
+        waiter=lambda port, timeout: released.wait(5),
+        opener=lambda url: None,
+    )
+    assert thread.is_alive(), "waiting must happen off the calling thread"
+    released.set()
+    thread.join(timeout=5)
+
+
+# --- The browser's own stderr was being printed as if it were ours ---
+
+def test_open_browser_discards_the_browsers_output():
+    """Chromium logs a zygote 'Broken pipe' on exit; inherited, it reads as our crash."""
+    import subprocess
+
+    from beyondmeetings.desktop import open_browser
+
+    calls = []
+    assert open_browser("http://127.0.0.1:7788/setup",
+                        spawn=lambda *a, **kw: calls.append((a, kw))) is True
+    (argv,), kwargs = calls[0]
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
+    assert "http://127.0.0.1:7788/setup" in argv
+
+
+def test_open_browser_survives_a_browser_that_cannot_be_launched():
+    from beyondmeetings.desktop import open_browser
+
+    def boom(*a, **kw):
+        raise OSError("no such file")
+
+    assert open_browser("http://127.0.0.1:7788/setup", spawn=boom) is False
+
+
+def test_open_browser_really_reaches_the_browser(tmp_path, monkeypatch):
+    """End-to-end: catches a wrong child-process invocation, which mocks cannot."""
+    import os
+    import time
+
+    from beyondmeetings.desktop import open_browser
+
+    marker = tmp_path / "opened.txt"
+    fake = tmp_path / "fake-browser"
+    fake.write_text(f'#!/bin/sh\nprintf "%s" "$1" > "{marker}"\n')
+    os.chmod(fake, 0o755)
+    monkeypatch.setenv("BROWSER", f"{fake} %s")
+
+    assert open_browser("http://127.0.0.1:7788/setup") is True
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline and not marker.exists():
+        time.sleep(0.05)
+    assert marker.exists(), "the child interpreter never handed the URL over"
+    assert marker.read_text() == "http://127.0.0.1:7788/setup"
