@@ -7,7 +7,8 @@ localhost:7788 is fully usable without it.
 from __future__ import annotations
 
 import threading
-import webbrowser
+
+from .desktop import open_browser
 
 try:
     import pystray
@@ -54,7 +55,11 @@ def run_tray(url: str, session=None) -> None:
         raise RuntimeError(TRAY_HINT)
 
     def open_app(_icon=None, _item=None):
-        webbrowser.open(url)
+        # Not `webbrowser.open`: this runs inside the long-lived `serve`
+        # process, whose output is server.log, so the browser's own stderr
+        # would be logged as ours — and for a browser started by command line
+        # `webbrowser.open` waits for it to exit, freezing this menu thread.
+        open_browser(url)
 
     def toggle(icon, _item=None):
         if session is None:

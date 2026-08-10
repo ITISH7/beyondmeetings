@@ -14,11 +14,13 @@ import subprocess
 import sys
 import threading
 import time
+import webbrowser
 from pathlib import Path
 
 DEFAULT_PORT = 7788
 APP_ID = "beyondmeetings"
 STARTUP_TIMEOUT = 20.0
+POLL_INTERVAL = 0.25
 
 ASSETS = Path(__file__).parent / "assets"
 
@@ -76,16 +78,28 @@ def server_is_running(port: int = DEFAULT_PORT) -> bool:
         return probe.connect_ex(("127.0.0.1", port)) == 0
 
 
-def wait_for_server(port: int = DEFAULT_PORT, timeout: float = STARTUP_TIMEOUT) -> bool:
+def wait_until(predicate, timeout: float = STARTUP_TIMEOUT) -> bool:
+    """Poll `predicate` until it holds, or `timeout` passes."""
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if server_is_running(port):
+    while True:
+        if predicate():
             return True
-        time.sleep(0.25)
-    return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(POLL_INTERVAL)
 
 
-def open_browser(url: str, spawn=None) -> bool:
+def wait_for_server(port: int = DEFAULT_PORT, timeout: float = STARTUP_TIMEOUT) -> bool:
+    """Wait for *something* to answer on `port`.
+
+    Only for the servers we launch as a separate process, where the port is
+    the one signal we have. A server running in this process should be waited
+    for by its own `started` flag instead — see `open_browser_when_ready`.
+    """
+    return wait_until(lambda: server_is_running(port), timeout)
+
+
+def open_browser(url: str, spawn=None, browser_check=None) -> bool:
     """Hand `url` to the browser without inheriting the browser's own output.
 
     `webbrowser.open` starts the browser with our stdout and stderr, so
@@ -96,7 +110,17 @@ def open_browser(url: str, spawn=None) -> bool:
     That is harmless browser teardown noise, but printed in the middle of
     `install.sh` it reads as beyondMeetings crashing. Going through a child
     interpreter lets those two descriptors point at /dev/null instead.
+
+    False means the URL was not handed over: there is no browser on this
+    machine (a headless box, or an SSH session with no BROWSER), or the child
+    could not be spawned. True is fire-and-forget — the child is not waited
+    on, so a browser that starts and then fails is not reported.
     """
+    try:
+        (browser_check or webbrowser.get)()
+    except webbrowser.Error:
+        return False
+
     spawn = spawn or subprocess.Popen
     try:
         spawn(
@@ -111,28 +135,48 @@ def open_browser(url: str, spawn=None) -> bool:
     return True
 
 
+def _warn(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
 def open_browser_when_ready(
     url: str,
-    port: int = DEFAULT_PORT,
+    ready,
     timeout: float = STARTUP_TIMEOUT,
+    cancelled=None,
     opener=None,
-    waiter=None,
+    reporter=None,
 ) -> threading.Thread:
-    """Open `url` from a watcher thread, once something answers on `port`.
+    """Open `url` from a watcher thread, once `ready()` says the server is up.
 
-    `setup` and `serve` run the server in this process and block in uvicorn,
-    so there is no moment between "socket bound" and "blocked" at which to
-    open the browser — both used to open it first and hope. That is a race
-    the browser wins whenever it is already running: it navigates in
-    milliseconds and lands on ERR_CONNECTION_REFUSED while uvicorn is still
-    binding, which is why this only showed up on some machines (a browser
-    that has to cold-start takes seconds and loses the race). `open_app`
-    already waits for the port before opening; this is the same rule for the
-    servers that run in-process.
+    `setup` runs the server in this process and blocks in uvicorn, so there is
+    no moment between "socket bound" and "blocked" at which to open the
+    browser — it used to open it first and hope. That is a race the browser
+    wins whenever it is already running: it navigates in milliseconds and
+    lands on ERR_CONNECTION_REFUSED while uvicorn is still binding, which is
+    why this only showed up on some machines (a browser that has to cold-start
+    takes seconds and loses the race).
+
+    `ready` is asked about *our* server — uvicorn's `started` — rather than
+    about the port, because a stranger already listening on it would otherwise
+    have our browser opened onto their page. `cancelled` lets the caller call
+    the wait off once its server has stopped for good.
     """
     def watch() -> None:
-        if (waiter or wait_for_server)(port, timeout):
-            (opener or open_browser)(url)
+        report = reporter or _warn
+        deadline = time.monotonic() + timeout
+        while not (cancelled and cancelled()):
+            if ready():
+                if not (opener or open_browser)(url):
+                    report(f"No browser could be opened — go to {url}")
+                return
+            if time.monotonic() >= deadline:
+                report(
+                    f"The server did not come up within {int(timeout)}s — "
+                    f"go to {url} once it does."
+                )
+                return
+            time.sleep(POLL_INTERVAL)
 
     thread = threading.Thread(target=watch, name="open-browser", daemon=True)
     thread.start()
