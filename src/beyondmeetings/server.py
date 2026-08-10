@@ -79,13 +79,13 @@ def create_app(
     def current_session():
         """Build the real session lazily — tests inject a fake instead."""
         if state["session"] is None:
-            from .audio.pipewire import PipeWireRecorder
+            from .audio.factory import build_recorder
             from .transcribe.factory import build_transcriber
 
             cfg = state["config"]
             state["session"] = SessionManager(
                 config=cfg,
-                recorder=PipeWireRecorder(
+                recorder=build_recorder(
                     Path(cfg.data_dir), segment_minutes=cfg.segment_minutes
                 ),
                 transcriber_factory=build_transcriber,
