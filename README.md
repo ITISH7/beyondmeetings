@@ -23,6 +23,13 @@ less install.sh
 bash install.sh
 ```
 
+If `raw.githubusercontent.com` is blocked on your network (`curl: (35)
+Connection reset by peer`), the same file is served by a mirror:
+
+```bash
+curl -fsSL https://cdn.jsdelivr.net/gh/nikhilm55/beyondmeetings@main/install.sh | bash
+```
+
 It checks your system, installs into `~/.local/share/beyondmeetings-app`, adds
 a `beyondmeetings` command to `~/.local/bin`, puts an app icon in your
 applications menu, and opens the setup wizard.

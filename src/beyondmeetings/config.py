@@ -1,8 +1,12 @@
 """Non-secret configuration. Secrets live in the OS keyring — see secrets.py."""
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # pragma: no cover - depends on interpreter
+    import tomli as tomllib
 
 import tomli_w
 from pydantic import BaseModel, Field

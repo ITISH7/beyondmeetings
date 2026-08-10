@@ -119,7 +119,9 @@ if [ "$USING_UV" -eq 1 ]; then
     export PATH="$HOME/.local/bin:$PATH"
   fi
   uv python install "${MIN_MAJOR}.${MIN_MINOR}"
-  uv venv --python "${MIN_MAJOR}.${MIN_MINOR}" "$PREFIX/venv"
+  # --seed puts pip in the venv. Without it `uv venv` produces an environment
+  # with no pip at all, and the install below dies on "No module named pip".
+  uv venv --seed --python "${MIN_MAJOR}.${MIN_MINOR}" "$PREFIX/venv"
 else
   "$INTERPRETER" -m venv "$PREFIX/venv"
 fi
