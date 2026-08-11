@@ -69,6 +69,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     opener.add_argument("--port", type=int, default=DEFAULT_PORT)
 
+    native = sub.add_parser("app", help="open the native desktop application")
+    native.add_argument("--port", type=int, default=DEFAULT_PORT)
+    native.add_argument("--setup", action="store_true", help="open Settings")
+
     serve = sub.add_parser("serve", help="run the app (page + tray)")
     serve.add_argument("--port", type=int, default=DEFAULT_PORT)
     serve.add_argument("--no-tray", action="store_true")
@@ -205,6 +209,16 @@ def main(argv: list[str] | None = None) -> int:
             + ("" if outcome == "started" else "  (already running)")
         )
         return 0
+
+    if args.command == "app":
+        from .desktop_app import run_native_app
+
+        try:
+            return run_native_app(
+                port=args.port, page="/setup" if args.setup else "/"
+            )
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
 
     if args.command == "serve":
         import threading

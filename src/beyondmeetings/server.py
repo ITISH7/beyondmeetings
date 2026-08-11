@@ -13,18 +13,47 @@ from typing import Callable
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .config import DEFAULT_CONFIG_PATH, Config, load_config, save_config
 from .doctor.base import Check, completion_percent, run_all, run_fix
 from .doctor.registry import build_checks
-from .history import list_meetings
+from .history import list_meetings, search_meetings
+from .library import list_tasks, open_library_folder, resolve_markdown
 from .llm.factory import build_provider
 from .pipeline import generate_notes
 from .session import SessionManager
 
 WEB_DIR = Path(__file__).parent / "web"
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1", "testserver"}
+
+
+class HostGuardMiddleware:
+    """Pure ASGI host guard, avoiding BaseHTTPMiddleware stream edge cases."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        raw = headers.get(b"host", b"").decode("latin-1")
+        if raw.startswith("["):
+            host = raw.partition("]")[0].lower() + "]"
+        elif raw.count(":") == 1:
+            host = raw.split(":", 1)[0].lower()
+        else:
+            host = raw.lower()
+        if host and host not in ALLOWED_HOSTS:
+            response = JSONResponse(
+                status_code=421,
+                content={"detail": f"Unexpected Host header: {host!r}"},
+            )
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 class SettingsPatch(BaseModel, extra="forbid"):
@@ -43,6 +72,10 @@ class RegenerateRequest(BaseModel, extra="forbid"):
     transcript: str
 
 
+class LibraryChatRequest(BaseModel, extra="forbid"):
+    query: str = Field(min_length=1, max_length=500)
+
+
 def create_app(
     config: Config | None = None,
     config_path: Path | None = None,
@@ -59,22 +92,9 @@ def create_app(
     )
 
     app = FastAPI(title="beyondMeetings")
-
-    @app.middleware("http")
-    async def guard_host(request, call_next):
-        """Reject requests whose Host header is not loopback.
-
-        Binding 127.0.0.1 does not stop DNS rebinding: an attacker's domain
-        resolving to 127.0.0.1 makes their page same-origin with this server,
-        which would otherwise hand them the regenerate endpoint.
-        """
-        host = (request.headers.get("host") or "").split(":")[0].lower()
-        if host and host not in ALLOWED_HOSTS:
-            return JSONResponse(
-                status_code=421,
-                content={"detail": f"Unexpected Host header: {host!r}"},
-            )
-        return await call_next(request)
+    # Binding loopback does not stop DNS rebinding: an attacker's domain can
+    # resolve to 127.0.0.1. Reject non-loopback Host headers before routing.
+    app.add_middleware(HostGuardMiddleware)
 
     def current_session():
         """Build the real session lazily — tests inject a fake instead."""
@@ -114,7 +134,7 @@ def create_app(
         if check is None:
             raise HTTPException(status_code=404, detail=f"no such check: {check_id}")
         result = run_fix(check, payload)
-        # Rebuild config from disk — a fix may have written to it (e.g. vault).
+        # Rebuild config from disk — a fix may have initialized the library.
         state["config"] = load_config(config_path)
         return {"result": result.model_dump(), **snapshot()}
 
@@ -156,8 +176,39 @@ def create_app(
 
     @app.get("/api/meetings")
     def meetings():
-        vault = state["config"].vault_path
-        return {"meetings": list_meetings(Path(vault)) if vault else []}
+        return {"meetings": list_meetings(Path(state["config"].notes_path))}
+
+    @app.get("/api/tasks")
+    def tasks():
+        return {"tasks": list_tasks(Path(state["config"].notes_path))}
+
+    @app.get("/api/note")
+    def note(path: str):
+        try:
+            target = resolve_markdown(Path(state["config"].notes_path), path)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="Note not found")
+        return {"path": path, "content": target.read_text(encoding="utf-8")}
+
+    @app.post("/api/library/open")
+    def open_library():
+        path = Path(state["config"].notes_path)
+        try:
+            open_library_folder(path)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Could not open the notes folder: {exc}"
+            ) from exc
+        return {"path": str(path)}
+
+    @app.post("/api/library/chat")
+    def library_chat(request: LibraryChatRequest):
+        return search_meetings(
+            Path(state["config"].notes_path),
+            request.query,
+        )
 
     @app.post("/api/regenerate")
     def regenerate(request: RegenerateRequest):

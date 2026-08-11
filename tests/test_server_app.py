@@ -55,6 +55,8 @@ def test_root_serves_the_app_page(app_and_session):
     response = client.get("/")
     assert response.status_code == 200
     assert "app.css" in response.text
+    assert "Ask your notes" in response.text
+    assert 'id="recordingBadge"' in response.text
 
 
 def test_setup_still_serves_the_wizard(app_and_session):
@@ -141,6 +143,63 @@ def test_history_lists_vault_meetings(app_and_session):
     )
     rows = client.get("/api/meetings").json()["meetings"]
     assert rows[0]["title"] == "Standup"
+
+
+def test_meeting_note_can_be_read_inside_the_app(app_and_session):
+    client, _, vault = app_and_session
+    note = vault / "Meetings" / "2026-07-30" / "Standup.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("# Standup\n\n## Executive Summary\nWe synced.\n")
+    response = client.get("/api/note", params={"path": "Meetings/2026-07-30/Standup"})
+    assert response.status_code == 200
+    assert "We synced" in response.json()["content"]
+
+
+def test_note_reader_refuses_traversal(app_and_session, tmp_path):
+    client, _, _ = app_and_session
+    (tmp_path / "secret.md").write_text("secret")
+    assert client.get("/api/note", params={"path": "../../secret"}).status_code == 403
+
+
+def test_tasks_are_available_to_the_built_in_app(app_and_session):
+    client, _, vault = app_and_session
+    board = vault / "Tasks" / "Task Board.md"
+    board.write_text(board.read_text().replace(
+        "> [!todo]+ Pending — 0\n",
+        "> [!todo]+ Pending — 1\n"
+        "> > **==Ship it==** · `App` · `HIGH`\n"
+        "> > Finish it. — **Nikhil** · [[Meetings/2026-07-30/Plan]]\n> >\n",
+    ))
+    assert client.get("/api/tasks").json()["tasks"][0]["title"] == "Ship it"
+
+
+def test_library_folder_can_be_opened_from_setup(app_and_session, monkeypatch):
+    client, _, vault = app_and_session
+    opened = []
+    monkeypatch.setattr("beyondmeetings.server.open_library_folder", opened.append)
+    response = client.post("/api/library/open", json={})
+    assert response.status_code == 200
+    assert opened == [vault]
+
+
+def test_library_chat_fetches_old_meeting_files(app_and_session):
+    client, _, vault = app_and_session
+    folder = vault / "Meetings" / "2026-07-30"
+    folder.mkdir(parents=True)
+    (folder / "Launch.md").write_text(
+        "---\ntags:\n  - meeting\ndate: 2026-07-30\n---\n\n"
+        "# Launch\n\n## Executive Summary\nWe planned the Mumbai launch.\n"
+    )
+    body = client.post("/api/library/chat", json={"query": "Mumbai"}).json()
+    assert body["sources"][0]["title"] == "Launch"
+
+
+def test_library_chat_rejects_an_empty_or_oversized_query(app_and_session):
+    client, _, _ = app_and_session
+    assert client.post("/api/library/chat", json={"query": ""}).status_code == 422
+    assert client.post(
+        "/api/library/chat", json={"query": "x" * 501}
+    ).status_code == 422
 
 
 def test_history_is_empty_without_a_vault(tmp_path):
