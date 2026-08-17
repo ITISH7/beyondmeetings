@@ -14,6 +14,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.27",
     "platformdirs>=4.0",
+    "fpdf2>=2.7,<3",
     # WASAPI loopback + microphone capture. Installed only on Windows.
     'SoundCard>=0.4.3; sys_platform == "win32"',
 ]

@@ -518,6 +518,12 @@ never overwritten.
 | `beyondmeetings doctor` | Check your installation. |
 | `beyondmeetings setup` | Reopen the setup wizard. |
 
+Open any meeting in the app to **Convert to PDF** or **Share** it. PDFs are
+saved in the visible `Downloads/BeyondMeetings` folder. Share uses the native
+share sheet when the desktop supports one; otherwise it reveals the PDF in the
+file manager so it can be attached from any application without copying it out
+of the hidden notes library.
+
 The tray icon needs two extra packages, because the GTK/AppIndicator stack is
 fiddly across desktops and not everyone wants it:
 

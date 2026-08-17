@@ -3,6 +3,7 @@ let meetings = [];
 let tasks = [];
 let polling = null;
 let lastCompletedPath = null;
+let currentNotePath = null;
 
 async function api(path, body) {
   const options = body === undefined ? {} : {
@@ -274,14 +275,85 @@ function renderMarkdown(markdown) {
 async function openNote(path, title, meeting = null) {
   try {
     const note = await api(`/api/note?path=${encodeURIComponent(path)}`);
+    currentNotePath = path;
     $("viewerTitle").textContent = title || "Meeting note";
     $("viewerDate").textContent = meeting
       ? `${longDate(meeting.date)} · ${meetingTime(meeting.recorded_at)}`
       : "Meeting note";
     renderMarkdown(note.content);
+    $("viewerStatus").hidden = true;
+    $("viewerStatus").classList.remove("error");
     $("viewer").showModal();
   } catch (err) {
     window.alert(`Could not open note: ${err.message}`);
+  }
+}
+
+function viewerStatus(message, isError = false) {
+  const status = $("viewerStatus");
+  status.textContent = message;
+  status.classList.toggle("error", isError);
+  status.hidden = !message;
+}
+
+async function createCurrentPdf(button) {
+  if (!currentNotePath) throw new Error("Open a meeting note first.");
+  button.disabled = true;
+  const original = button.innerHTML;
+  button.textContent = "Creating…";
+  try {
+    const result = await api("/api/note/pdf", { path: currentNotePath });
+    viewerStatus(`PDF saved to ${result.pdf_path}`);
+    return result;
+  } finally {
+    button.disabled = false;
+    button.innerHTML = original;
+  }
+}
+
+async function shareCurrentPdf(button) {
+  if (!currentNotePath) throw new Error("Open a meeting note first.");
+  button.disabled = true;
+  const original = button.innerHTML;
+  button.textContent = "Preparing…";
+  try {
+    const created = await api("/api/note/pdf", { path: currentNotePath });
+    if (typeof navigator.share === "function" && typeof File === "function") {
+      try {
+        const response = await fetch(
+          `/api/note/pdf?path=${encodeURIComponent(currentNotePath)}`
+        );
+        if (!response.ok) throw new Error("Could not read the generated PDF.");
+        const file = new File([await response.blob()], created.filename, {
+          type: "application/pdf",
+        });
+        const shareData = {
+          title: $("viewerTitle").textContent,
+          text: "Meeting notes from BeyondMeetings",
+          files: [file],
+        };
+        const canShare = typeof navigator.canShare !== "function"
+          || navigator.canShare(shareData);
+        if (canShare) {
+          await navigator.share(shareData);
+          viewerStatus("PDF shared.");
+          return;
+        }
+      } catch (err) {
+        if (err.name === "AbortError") {
+          viewerStatus("Sharing cancelled.");
+          return;
+        }
+      }
+    }
+
+    const fallback = await api("/api/note/share", { path: currentNotePath });
+    viewerStatus(
+      `PDF ready in Downloads/BeyondMeetings. Its folder is open, so you can attach ${fallback.filename} in any app without copying it.`
+    );
+  } finally {
+    button.disabled = false;
+    button.innerHTML = original;
   }
 }
 
@@ -438,6 +510,14 @@ $("tasksTab").onclick = () => showPanel("tasks");
 $("chatTab").onclick = () => showPanel("chat");
 $("chatForm").onsubmit = (e) => { e.preventDefault(); askLibrary($("chatInput").value); };
 $("suggestions").onclick = (e) => { if (e.target.matches("button")) askLibrary(e.target.textContent); };
+$('convertPdf').onclick = async (event) => {
+  try { await createCurrentPdf(event.currentTarget); }
+  catch (err) { viewerStatus(`Could not create PDF: ${err.message}`, true); }
+};
+$('sharePdf').onclick = async (event) => {
+  try { await shareCurrentPdf(event.currentTarget); }
+  catch (err) { viewerStatus(`Could not share PDF: ${err.message}`, true); }
+};
 $("closeViewer").onclick = () => $("viewer").close();
 $("viewer").onclick = (e) => { if (e.target === $("viewer")) $("viewer").close(); };
 

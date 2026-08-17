@@ -1,8 +1,11 @@
+from pathlib import Path
+
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from beyondmeetings.config import Config
-from beyondmeetings.server import create_app
+from beyondmeetings.server import NoteRequest, create_app
 from beyondmeetings.vault.scaffold import scaffold_vault
 
 IDLE = {
@@ -10,6 +13,13 @@ IDLE = {
     "elapsed_seconds": 0, "segments_done": 0, "segments_total": 0,
     "note_path": None, "transcript_path": None, "error": None,
 }
+
+
+def route_endpoint(app, path, method):
+    return next(
+        route.endpoint for route in app.routes
+        if getattr(route, "path", None) == path and method in route.methods
+    )
 
 
 class FakeSession:
@@ -46,6 +56,7 @@ def app_and_session(tmp_path):
         config_path=tmp_path / "config.toml",
         checks_factory=lambda c: [],
         session=session,
+        pdf_export_dir=tmp_path / "exports",
     )
     return TestClient(app), session, vault
 
@@ -57,6 +68,13 @@ def test_root_serves_the_app_page(app_and_session):
     assert "app.css" in response.text
     assert "Ask your notes" in response.text
     assert 'id="recordingBadge"' in response.text
+
+
+def test_app_page_includes_pdf_and_share_actions(app_and_session):
+    client, _, _ = app_and_session
+    page = route_endpoint(client.app, "/", "GET")()
+    assert 'id="convertPdf"' in page
+    assert 'id="sharePdf"' in page
 
 
 def test_setup_still_serves_the_wizard(app_and_session):
@@ -153,6 +171,56 @@ def test_meeting_note_can_be_read_inside_the_app(app_and_session):
     response = client.get("/api/note", params={"path": "Meetings/2026-07-30/Standup"})
     assert response.status_code == 200
     assert "We synced" in response.json()["content"]
+
+
+def test_meeting_note_can_be_exported_and_downloaded_as_pdf(app_and_session):
+    client, _, vault = app_and_session
+    note = vault / "Meetings" / "2026-07-30" / "Standup.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("# Standup\n\n## Executive Summary\nWe synced.\n")
+
+    create_pdf = route_endpoint(client.app, "/api/note/pdf", "POST")
+    created = create_pdf(NoteRequest(path="Meetings/2026-07-30/Standup"))
+    target = Path(created["pdf_path"])
+    assert target.name == "Standup - 2026-07-30.pdf"
+    assert target.read_bytes().startswith(b"%PDF")
+
+    download_pdf = route_endpoint(client.app, "/api/note/pdf", "GET")
+    downloaded = download_pdf("Meetings/2026-07-30/Standup")
+    assert downloaded.media_type == "application/pdf"
+    assert Path(downloaded.path).read_bytes().startswith(b"%PDF")
+
+
+def test_share_reveals_the_generated_pdf(tmp_path):
+    vault = tmp_path / "vault"
+    note = vault / "Meetings" / "2026-07-30" / "Plan.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("# Plan\n\nShare this meeting.\n")
+    shared = []
+    app = create_app(
+        config=Config(vault_path=str(vault), data_dir=str(tmp_path / "data")),
+        config_path=tmp_path / "config.toml",
+        checks_factory=lambda config: [],
+        session=FakeSession(),
+        pdf_export_dir=tmp_path / "exports",
+        pdf_sharer=shared.append,
+    )
+
+    share_pdf = route_endpoint(app, "/api/note/share", "POST")
+    response = share_pdf(NoteRequest(path="Meetings/2026-07-30/Plan"))
+
+    assert response["action"] == "revealed"
+    assert shared == [Path(response["pdf_path"])]
+    assert shared[0].is_file()
+
+
+def test_pdf_export_refuses_traversal(app_and_session, tmp_path):
+    client, _, _ = app_and_session
+    (tmp_path / "secret.md").write_text("secret")
+    create_pdf = route_endpoint(client.app, "/api/note/pdf", "POST")
+    with pytest.raises(HTTPException) as error:
+        create_pdf(NoteRequest(path="../../secret"))
+    assert error.value.status_code == 403
 
 
 def test_note_reader_refuses_traversal(app_and_session, tmp_path):

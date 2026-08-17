@@ -25,7 +25,9 @@ from .base import LLMProvider, parse_meeting_note
 AGENT_COMMANDS = {
     "claude-cli": ["claude", "-p"],
     "gemini-cli": ["gemini", "-p"],
-    "codex-cli": ["codex", "exec", "-"],
+    # Desktop launchers do not reliably start inside a Git repository. Codex
+    # rejects non-interactive runs there unless this documented opt-in is set.
+    "codex-cli": ["codex", "exec", "--skip-git-repo-check", "-"],
 }
 
 TIMEOUT = 900.0  # an agent CLI on a long transcript is not fast

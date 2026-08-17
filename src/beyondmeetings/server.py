@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from .config import DEFAULT_CONFIG_PATH, Config, load_config, save_config
@@ -21,6 +21,11 @@ from .doctor.registry import build_checks
 from .history import list_meetings, search_meetings
 from .library import list_tasks, open_library_folder, resolve_markdown
 from .llm.factory import build_provider
+from .pdf_export import (
+    default_pdf_export_dir,
+    export_meeting_pdf,
+    reveal_pdf_for_sharing,
+)
 from .pipeline import generate_notes
 from .session import SessionManager
 
@@ -72,6 +77,10 @@ class RegenerateRequest(BaseModel, extra="forbid"):
     transcript: str
 
 
+class NoteRequest(BaseModel, extra="forbid"):
+    path: str
+
+
 class LibraryChatRequest(BaseModel, extra="forbid"):
     query: str = Field(min_length=1, max_length=500)
 
@@ -81,11 +90,15 @@ def create_app(
     config_path: Path | None = None,
     checks_factory: Callable[[Config], list[Check]] | None = None,
     session=None,
+    pdf_export_dir: Path | None = None,
+    pdf_sharer: Callable[[Path], None] | None = None,
 ) -> FastAPI:
     config_path = Path(config_path or DEFAULT_CONFIG_PATH)
     state = {
         "config": config if config is not None else load_config(config_path),
         "session": session,
+        "pdf_export_dir": Path(pdf_export_dir or default_pdf_export_dir()),
+        "pdf_sharer": pdf_sharer or reveal_pdf_for_sharing,
     }
     factory = checks_factory or (
         lambda cfg: build_checks(cfg, config_path=config_path)
@@ -191,6 +204,51 @@ def create_app(
         if not target.is_file():
             raise HTTPException(status_code=404, detail="Note not found")
         return {"path": path, "content": target.read_text(encoding="utf-8")}
+
+    def make_pdf(path: str) -> Path:
+        try:
+            return export_meeting_pdf(
+                Path(state["config"].notes_path),
+                path,
+                state["pdf_export_dir"],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Could not create PDF: {exc}"
+            ) from exc
+
+    @app.post("/api/note/pdf")
+    def create_note_pdf(request: NoteRequest):
+        target = make_pdf(request.path)
+        return {"pdf_path": str(target), "filename": target.name}
+
+    @app.get("/api/note/pdf")
+    def download_note_pdf(path: str):
+        target = make_pdf(path)
+        return FileResponse(
+            target,
+            media_type="application/pdf",
+            filename=target.name,
+        )
+
+    @app.post("/api/note/share")
+    def share_note_pdf(request: NoteRequest):
+        target = make_pdf(request.path)
+        try:
+            state["pdf_sharer"](target)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Could not open the PDF for sharing: {exc}"
+            ) from exc
+        return {
+            "pdf_path": str(target),
+            "filename": target.name,
+            "action": "revealed",
+        }
 
     @app.post("/api/library/open")
     def open_library():

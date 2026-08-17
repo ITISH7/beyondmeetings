@@ -143,12 +143,21 @@
 
   <dialog id="viewer" class="viewer">
     <header class="viewerBar">
-      <div>
+      <div class="viewerHeading">
         <span class="eyebrow" id="viewerDate">Meeting note</span>
         <strong id="viewerTitle">Meeting note</strong>
       </div>
-      <button id="closeViewer" class="iconBtn" aria-label="Close note">×</button>
+      <div class="viewerActions">
+        <button id="convertPdf" class="viewerButton" type="button">
+          <span aria-hidden="true">⇩</span> Convert to PDF
+        </button>
+        <button id="sharePdf" class="viewerButton primary" type="button">
+          <span aria-hidden="true">↗</span> Share
+        </button>
+        <button id="closeViewer" class="iconBtn" type="button" aria-label="Close note">×</button>
+      </div>
     </header>
+    <div id="viewerStatus" class="viewerStatus" aria-live="polite" hidden></div>
     <article id="noteBody" class="noteBody"></article>
   </dialog>
   <script src="/app.js"></script>

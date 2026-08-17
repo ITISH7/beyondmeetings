@@ -415,9 +415,30 @@ button.taskCard:hover { border-color: var(--accent); }
 }
 .viewer::backdrop { background: rgba(10, 10, 16, .65); backdrop-filter: blur(2px); }
 .viewerBar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(12px); }
-.viewerBar > div { display: flex; min-width: 0; flex-direction: column; }
+.viewerHeading { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .viewerBar strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.viewerActions { display: flex; align-items: center; gap: 7px; margin-left: 14px; }
+.viewerButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.viewerButton:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.viewerButton.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.viewerButton.primary:hover:not(:disabled) { background: var(--accent-dark); color: #fff; }
+.viewerButton:disabled { opacity: .55; cursor: wait; }
 .iconBtn { width: 34px; height: 34px; border: 0; border-radius: 9px; background: var(--surface-soft); color: var(--muted); font-size: 23px; cursor: pointer; }
+.viewerStatus { padding: 9px 20px; border-bottom: 1px solid var(--line); background: var(--ok-soft); color: var(--ok); font-size: 11.5px; overflow-wrap: anywhere; }
+.viewerStatus.error { background: var(--bad-soft); color: var(--bad); }
 .noteBody { max-width: 680px; margin: 0 auto; padding: 30px 30px 70px; }
 .noteBody h1 { margin: 0 0 24px; font-size: 27px; line-height: 1.22; letter-spacing: -.025em; }
 .noteBody h2 { margin: 30px 0 9px; font-size: 16px; }
@@ -456,6 +477,10 @@ button.taskCard:hover { border-color: var(--accent); }
   .suggestions, .chatMessages, .chatComposer { padding-left: 18px; padding-right: 18px; }
   .message { max-width: 94%; }
   .chatSources { padding-left: 0; }
+  .viewerBar { align-items: flex-start; gap: 10px; padding: 12px; }
+  .viewerActions { margin-left: 0; }
+  .viewerButton { width: 34px; padding: 7px; justify-content: center; font-size: 0; }
+  .viewerButton span { font-size: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }

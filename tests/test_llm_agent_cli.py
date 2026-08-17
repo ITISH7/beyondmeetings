@@ -55,6 +55,15 @@ def test_uses_the_expected_command(monkeypatch):
     assert calls[0][0] == ["claude", "-p"]
 
 
+def test_codex_allows_desktop_runs_outside_a_git_repository(monkeypatch):
+    calls = []
+    _patch(monkeypatch, FakeRun(stdout=NOTE_JSON), calls)
+
+    AgentCliProvider("codex-cli").analyse("p")
+
+    assert calls[0][0] == ["codex", "exec", "--skip-git-repo-check", "-"]
+
+
 def test_command_can_be_overridden(monkeypatch):
     calls = []
     _patch(monkeypatch, FakeRun(stdout=NOTE_JSON), calls)
@@ -122,7 +131,9 @@ def test_runs_the_discovered_absolute_binary(tmp_path, monkeypatch):
 
     AgentCliProvider("codex-cli").analyse("prompt")
 
-    assert calls[0][0] == [str(binary), "exec", "-"]
+    assert calls[0][0] == [
+        str(binary), "exec", "--skip-git-repo-check", "-",
+    ]
 
 
 def test_a_nonzero_exit_mentions_signing_in(monkeypatch):
