@@ -437,13 +437,17 @@ button.taskCard:hover { border-color: var(--accent); }
 .viewerButton.primary:hover:not(:disabled) { background: var(--accent-dark); color: #fff; }
 .viewerButton:disabled { opacity: .55; cursor: wait; }
 .iconBtn { width: 34px; height: 34px; border: 0; border-radius: 9px; background: var(--surface-soft); color: var(--muted); font-size: 23px; cursor: pointer; }
-.viewerTabsBar { position: sticky; top: 63px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 20px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 96%, transparent); backdrop-filter: blur(12px); }
-.viewerTabs { display: flex; align-self: stretch; gap: 18px; overflow-x: auto; }
-.viewerTab { position: relative; flex: 0 0 auto; padding: 13px 1px 12px; border: 0; background: transparent; color: var(--muted); font-size: 11.5px; font-weight: 680; white-space: nowrap; cursor: pointer; }
-.viewerTab::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; border-radius: 2px 2px 0 0; background: transparent; content: ""; }
-.viewerTab:hover, .viewerTab.active { color: var(--accent); }
-.viewerTab.active::after { background: var(--accent); }
-.summaryLanguage { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10.5px; font-weight: 650; white-space: nowrap; }
+.viewerTabsBar { position: sticky; top: 63px; z-index: 1; display: flex; align-items: stretch; flex-direction: column; gap: 9px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 97%, transparent); backdrop-filter: blur(12px); }
+.viewerTabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; width: 100%; }
+.viewerTab { display: flex; min-width: 0; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--fg); text-align: left; cursor: pointer; }
+.viewerTab:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: var(--surface-soft); }
+.viewerTab.active { border-color: var(--accent); background: color-mix(in srgb, var(--surface) 90%, var(--accent) 10%); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent); }
+.viewerTabNumber { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: var(--surface-soft); color: var(--muted); font-size: 10px; font-weight: 760; }
+.viewerTab.active .viewerTabNumber { background: var(--accent); color: #fff; }
+.viewerTabCopy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.viewerTabCopy strong { overflow: hidden; color: inherit; font-size: 13px; font-weight: 700; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.viewerTabCopy small { overflow: hidden; color: var(--muted); font-size: 10px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.summaryLanguage { display: flex; align-self: flex-end; align-items: center; gap: 7px; color: var(--muted); font-size: 10.5px; font-weight: 650; white-space: nowrap; }
 .summaryLanguage select { min-width: 108px; padding: 6px 26px 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--fg); font: inherit; cursor: pointer; }
 .viewerStatus { padding: 9px 20px; border-bottom: 1px solid var(--line); background: var(--ok-soft); color: var(--ok); font-size: 11.5px; overflow-wrap: anywhere; }
 .viewerStatus.error { background: var(--bad-soft); color: var(--bad); }
@@ -500,8 +504,10 @@ button.taskCard:hover { border-color: var(--accent); }
   .viewerActions { margin-left: 0; }
   .viewerButton { width: 34px; padding: 7px; justify-content: center; font-size: 0; }
   .viewerButton span { font-size: 14px; }
-  .viewerTabsBar { top: 59px; align-items: stretch; flex-direction: column; gap: 0; padding: 0 12px 10px; }
-  .viewerTabs { gap: 14px; }
+  .viewerTabsBar { top: 59px; padding: 9px 12px; }
+  .viewerTabs { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 2px; }
+  .viewerTab { min-width: 174px; }
+  .viewerTabCopy small { display: none; }
   .summaryLanguage { justify-content: flex-end; }
 }
 @media (prefers-reduced-motion: reduce) {

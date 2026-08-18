@@ -84,6 +84,9 @@ def test_app_page_includes_pdf_and_share_actions(app_and_session):
     assert 'id="discussionView"' in page
     assert 'id="translationView"' in page
     assert 'id="translationLanguage"' in page
+    assert "Decisions and action items" in page
+    assert "Topics, reasoning and context" in page
+    assert "Complete conversation" in page
 
 
 def test_ai_tabs_stay_clickable_while_background_work_runs(app_and_session):

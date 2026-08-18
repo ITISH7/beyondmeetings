@@ -311,6 +311,9 @@ function updateViewerTabs() {
   $("minutesView").classList.toggle("active", currentNoteView === "minutes");
   $("discussionView").classList.toggle("active", currentNoteView === "discussion");
   $("translationView").classList.toggle("active", currentNoteView === "translation");
+  $("minutesView").setAttribute("aria-selected", currentNoteView === "minutes");
+  $("discussionView").setAttribute("aria-selected", currentNoteView === "discussion");
+  $("translationView").setAttribute("aria-selected", currentNoteView === "translation");
   $("translationLanguageWrap").hidden = currentNoteView !== "translation";
 }
 

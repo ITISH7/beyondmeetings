@@ -158,15 +158,30 @@
       </div>
     </header>
     <div class="viewerTabsBar">
-      <nav class="viewerTabs" aria-label="Meeting note views">
-        <button id="minutesView" class="viewerTab active" type="button">
-          Minutes of Meeting
+      <nav class="viewerTabs" aria-label="Meeting note views" role="tablist">
+        <button id="minutesView" class="viewerTab active" type="button"
+                role="tab" aria-selected="true">
+          <span class="viewerTabNumber" aria-hidden="true">1</span>
+          <span class="viewerTabCopy">
+            <strong>Minutes of Meeting</strong>
+            <small>Decisions and action items</small>
+          </span>
         </button>
-        <button id="discussionView" class="viewerTab" type="button">
-          <span aria-hidden="true">✦</span> Discussion Summary
+        <button id="discussionView" class="viewerTab" type="button"
+                role="tab" aria-selected="false">
+          <span class="viewerTabNumber" aria-hidden="true">2</span>
+          <span class="viewerTabCopy">
+            <strong>Discussion Summary</strong>
+            <small>Topics, reasoning and context</small>
+          </span>
         </button>
-        <button id="translationView" class="viewerTab" type="button">
-          <span aria-hidden="true">文</span> Translated Transcript
+        <button id="translationView" class="viewerTab" type="button"
+                role="tab" aria-selected="false">
+          <span class="viewerTabNumber" aria-hidden="true">3</span>
+          <span class="viewerTabCopy">
+            <strong>Translated Transcript</strong>
+            <small>Complete conversation</small>
+          </span>
         </button>
       </nav>
       <label id="translationLanguageWrap" class="summaryLanguage" hidden>
