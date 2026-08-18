@@ -86,6 +86,15 @@ def test_app_page_includes_pdf_and_share_actions(app_and_session):
     assert 'id="translationLanguage"' in page
 
 
+def test_ai_tabs_stay_clickable_while_background_work_runs(app_and_session):
+    client, _, _ = app_and_session
+    script = route_endpoint(client.app, "/{asset}.js", "GET")("app")
+    assert '$("discussionView").disabled = true' not in script.body.decode()
+    assert '$("translationView").disabled = true' not in script.body.decode()
+    assert "discussionRequests.get(cacheKey)" in script.body.decode()
+    assert "translationRequests.get(cacheKey)" in script.body.decode()
+
+
 def test_setup_still_serves_the_wizard(app_and_session):
     client, _, _ = app_and_session
     assert "setup.css" in client.get("/setup").text

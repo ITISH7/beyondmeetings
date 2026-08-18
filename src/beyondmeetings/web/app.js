@@ -9,6 +9,8 @@ let currentNoteView = "minutes";
 let currentNotesLanguage = "English";
 const discussionSummaries = new Map();
 const translatedTranscripts = new Map();
+const discussionRequests = new Map();
+const translationRequests = new Map();
 
 async function api(path, body) {
   const options = body === undefined ? {} : {
@@ -342,6 +344,7 @@ function renderTranscript(transcript, language) {
 
 async function showNoteView(view) {
   if (!currentNotePath) return;
+  const notePath = currentNotePath;
   currentNoteView = view;
   updateViewerTabs();
   viewerStatus("");
@@ -352,61 +355,71 @@ async function showNoteView(view) {
 
   if (view === "translation") {
     const language = $("translationLanguage").value;
-    const cacheKey = `${currentNotePath}\n${language}`;
+    const cacheKey = `${notePath}\n${language}`;
     if (translatedTranscripts.has(cacheKey)) {
       renderTranscript(translatedTranscripts.get(cacheKey), language);
       return;
     }
 
     noteLoading("Translating the complete transcript without summarizing or omitting speech…");
-    $("translationView").disabled = true;
-    $("translationLanguage").disabled = true;
     try {
-      const result = await api("/api/note/translation", {
-        path: currentNotePath,
-        language,
-      });
+      let request = translationRequests.get(cacheKey);
+      if (!request) {
+        request = api("/api/note/translation", {
+          path: notePath,
+          language,
+        });
+        translationRequests.set(cacheKey, request);
+      }
+      const result = await request;
       translatedTranscripts.set(cacheKey, result.content);
-      if (currentNoteView === "translation" && $("translationLanguage").value === language) {
+      if (
+        currentNotePath === notePath
+        && currentNoteView === "translation"
+        && $("translationLanguage").value === language
+      ) {
         renderTranscript(result.content, language);
       }
     } catch (err) {
-      if (currentNoteView === "translation") {
+      if (currentNotePath === notePath && currentNoteView === "translation") {
         renderTranscript("The full transcript could not be translated.", language);
         viewerStatus(`Could not translate transcript: ${err.message}`, true);
       }
     } finally {
-      $("translationView").disabled = false;
-      $("translationLanguage").disabled = false;
+      translationRequests.delete(cacheKey);
     }
     return;
   }
 
   const language = currentNotesLanguage;
-  const cacheKey = `${currentNotePath}\n${language}`;
+  const cacheKey = `${notePath}\n${language}`;
   if (discussionSummaries.has(cacheKey)) {
     renderMarkdown(discussionSummaries.get(cacheKey));
     return;
   }
 
   noteLoading("Creating a clear discussion summary…");
-  $("discussionView").disabled = true;
   try {
-    const result = await api("/api/note/discussion", {
-      path: currentNotePath,
-      language,
-    });
+    let request = discussionRequests.get(cacheKey);
+    if (!request) {
+      request = api("/api/note/discussion", {
+        path: notePath,
+        language,
+      });
+      discussionRequests.set(cacheKey, request);
+    }
+    const result = await request;
     discussionSummaries.set(cacheKey, result.content);
-    if (currentNoteView === "discussion") {
+    if (currentNotePath === notePath && currentNoteView === "discussion") {
       renderMarkdown(result.content);
     }
   } catch (err) {
-    if (currentNoteView === "discussion") {
+    if (currentNotePath === notePath && currentNoteView === "discussion") {
       renderMarkdown("# Discussion Summary\n\nThe AI summary could not be generated.");
       viewerStatus(`Could not create discussion summary: ${err.message}`, true);
     }
   } finally {
-    $("discussionView").disabled = false;
+    discussionRequests.delete(cacheKey);
   }
 }
 
