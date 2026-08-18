@@ -4,6 +4,9 @@ let tasks = [];
 let polling = null;
 let lastCompletedPath = null;
 let currentNotePath = null;
+let currentNoteContent = "";
+let currentNoteView = "minutes";
+const discussionSummaries = new Map();
 
 async function api(path, body) {
   const options = body === undefined ? {} : {
@@ -276,16 +279,85 @@ async function openNote(path, title, meeting = null) {
   try {
     const note = await api(`/api/note?path=${encodeURIComponent(path)}`);
     currentNotePath = path;
+    currentNoteContent = note.content;
+    currentNoteView = "minutes";
+    discussionSummaries.clear();
+    if ([...$("summaryLanguage").options].some((option) => option.value === note.notes_language)) {
+      $("summaryLanguage").value = note.notes_language;
+    } else {
+      $("summaryLanguage").value = "English";
+    }
     $("viewerTitle").textContent = title || "Meeting note";
     $("viewerDate").textContent = meeting
       ? `${longDate(meeting.date)} · ${meetingTime(meeting.recorded_at)}`
       : "Meeting note";
     renderMarkdown(note.content);
+    updateViewerTabs();
     $("viewerStatus").hidden = true;
     $("viewerStatus").classList.remove("error");
     $("viewer").showModal();
   } catch (err) {
     window.alert(`Could not open note: ${err.message}`);
+  }
+}
+
+function updateViewerTabs() {
+  $("minutesView").classList.toggle("active", currentNoteView === "minutes");
+  $("discussionView").classList.toggle("active", currentNoteView === "discussion");
+  $("summaryLanguageWrap").hidden = currentNoteView !== "discussion";
+}
+
+function discussionLoading() {
+  const body = $("noteBody");
+  body.replaceChildren();
+  const loading = document.createElement("div");
+  loading.className = "noteLoading";
+  const content = document.createElement("div");
+  const icon = document.createElement("span");
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = "✦";
+  content.append(icon, "Creating a clear discussion summary in your chosen language…");
+  loading.append(content);
+  body.append(loading);
+}
+
+async function showNoteView(view) {
+  if (!currentNotePath) return;
+  currentNoteView = view;
+  updateViewerTabs();
+  viewerStatus("");
+  if (view === "minutes") {
+    renderMarkdown(currentNoteContent);
+    return;
+  }
+
+  const language = $("summaryLanguage").value;
+  const cacheKey = `${currentNotePath}\n${language}`;
+  if (discussionSummaries.has(cacheKey)) {
+    renderMarkdown(discussionSummaries.get(cacheKey));
+    return;
+  }
+
+  discussionLoading();
+  $("discussionView").disabled = true;
+  $("summaryLanguage").disabled = true;
+  try {
+    const result = await api("/api/note/discussion", {
+      path: currentNotePath,
+      language,
+    });
+    discussionSummaries.set(cacheKey, result.content);
+    if (currentNoteView === "discussion" && $("summaryLanguage").value === language) {
+      renderMarkdown(result.content);
+    }
+  } catch (err) {
+    if (currentNoteView === "discussion") {
+      renderMarkdown("# Discussion Summary\n\nThe AI summary could not be generated.");
+      viewerStatus(`Could not create discussion summary: ${err.message}`, true);
+    }
+  } finally {
+    $("discussionView").disabled = false;
+    $("summaryLanguage").disabled = false;
   }
 }
 
@@ -302,7 +374,11 @@ async function createCurrentPdf(button) {
   const original = button.innerHTML;
   button.textContent = "Creating…";
   try {
-    const result = await api("/api/note/pdf", { path: currentNotePath });
+    const result = await api("/api/note/pdf", {
+      path: currentNotePath,
+      view: currentNoteView,
+      language: $("summaryLanguage").value,
+    });
     viewerStatus(`PDF saved to ${result.pdf_path}`);
     return result;
   } finally {
@@ -317,19 +393,25 @@ async function shareCurrentPdf(button) {
   const original = button.innerHTML;
   button.textContent = "Preparing…";
   try {
-    const created = await api("/api/note/pdf", { path: currentNotePath });
+    const request = {
+      path: currentNotePath,
+      view: currentNoteView,
+      language: $("summaryLanguage").value,
+    };
+    const created = await api("/api/note/pdf", request);
     if (typeof navigator.share === "function" && typeof File === "function") {
       try {
-        const response = await fetch(
-          `/api/note/pdf?path=${encodeURIComponent(currentNotePath)}`
-        );
+        const query = new URLSearchParams(request);
+        const response = await fetch(`/api/note/pdf?${query}`);
         if (!response.ok) throw new Error("Could not read the generated PDF.");
         const file = new File([await response.blob()], created.filename, {
           type: "application/pdf",
         });
         const shareData = {
           title: $("viewerTitle").textContent,
-          text: "Meeting notes from BeyondMeetings",
+          text: currentNoteView === "discussion"
+            ? `Meeting discussion summary in ${request.language} from BeyondMeetings`
+            : "Meeting minutes from BeyondMeetings",
           files: [file],
         };
         const canShare = typeof navigator.canShare !== "function"
@@ -347,7 +429,7 @@ async function shareCurrentPdf(button) {
       }
     }
 
-    const fallback = await api("/api/note/share", { path: currentNotePath });
+    const fallback = await api("/api/note/share", request);
     viewerStatus(
       `PDF ready in Downloads/BeyondMeetings. Its folder is open, so you can attach ${fallback.filename} in any app without copying it.`
     );
@@ -510,6 +592,9 @@ $("tasksTab").onclick = () => showPanel("tasks");
 $("chatTab").onclick = () => showPanel("chat");
 $("chatForm").onsubmit = (e) => { e.preventDefault(); askLibrary($("chatInput").value); };
 $("suggestions").onclick = (e) => { if (e.target.matches("button")) askLibrary(e.target.textContent); };
+$("minutesView").onclick = () => showNoteView("minutes");
+$("discussionView").onclick = () => showNoteView("discussion");
+$("summaryLanguage").onchange = () => showNoteView("discussion");
 $('convertPdf').onclick = async (event) => {
   try { await createCurrentPdf(event.currentTarget); }
   catch (err) { viewerStatus(`Could not create PDF: ${err.message}`, true); }

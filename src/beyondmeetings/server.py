@@ -9,7 +9,7 @@ surface to authenticate.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -18,6 +18,12 @@ from pydantic import BaseModel, Field
 from .config import DEFAULT_CONFIG_PATH, Config, load_config, save_config
 from .doctor.base import Check, completion_percent, run_all, run_fix
 from .doctor.registry import build_checks
+from .discussion import (
+    SUMMARY_LANGUAGES,
+    DiscussionCache,
+    discussion_pdf_markdown,
+    generate_discussion_summary,
+)
 from .history import list_meetings, search_meetings
 from .library import list_tasks, open_library_folder, resolve_markdown
 from .llm.factory import build_provider
@@ -79,6 +85,14 @@ class RegenerateRequest(BaseModel, extra="forbid"):
 
 class NoteRequest(BaseModel, extra="forbid"):
     path: str
+    view: Literal["minutes", "discussion"] = "minutes"
+    language: str = Field(default="English", min_length=1, max_length=30)
+
+
+class DiscussionRequest(BaseModel, extra="forbid"):
+    path: str
+    language: str = Field(default="English", min_length=1, max_length=30)
+    regenerate: bool = False
 
 
 class LibraryChatRequest(BaseModel, extra="forbid"):
@@ -94,11 +108,15 @@ def create_app(
     pdf_sharer: Callable[[Path], None] | None = None,
 ) -> FastAPI:
     config_path = Path(config_path or DEFAULT_CONFIG_PATH)
+    initial_config = config if config is not None else load_config(config_path)
     state = {
-        "config": config if config is not None else load_config(config_path),
+        "config": initial_config,
         "session": session,
         "pdf_export_dir": Path(pdf_export_dir or default_pdf_export_dir()),
         "pdf_sharer": pdf_sharer or reveal_pdf_for_sharing,
+        "discussion_cache": DiscussionCache(
+            Path(initial_config.data_dir) / "discussion-summaries"
+        ),
     }
     factory = checks_factory or (
         lambda cfg: build_checks(cfg, config_path=config_path)
@@ -195,23 +213,108 @@ def create_app(
     def tasks():
         return {"tasks": list_tasks(Path(state["config"].notes_path))}
 
-    @app.get("/api/note")
-    def note(path: str):
+    def read_note(path: str) -> tuple[Path, str]:
         try:
             target = resolve_markdown(Path(state["config"].notes_path), path)
         except (OSError, RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         if not target.is_file():
             raise HTTPException(status_code=404, detail="Note not found")
-        return {"path": path, "content": target.read_text(encoding="utf-8")}
+        return target, target.read_text(encoding="utf-8")
 
-    def make_pdf(path: str) -> Path:
+    def summary_language(language: str) -> str:
+        matched = next(
+            (item for item in SUMMARY_LANGUAGES if item.casefold() == language.casefold()),
+            None,
+        )
+        if matched is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported summary language: {language}",
+            )
+        return matched
+
+    def get_discussion(path: str, language: str, regenerate: bool = False) -> tuple[str, bool]:
+        language = summary_language(language)
+        target, content = read_note(path)
+        note_id = str(target.relative_to(Path(state["config"].notes_path).resolve()))
+        if not regenerate:
+            cached = state["discussion_cache"].get(note_id, content, language)
+            if cached:
+                return cached, True
         try:
+            generated = generate_discussion_summary(
+                content,
+                language,
+                build_provider(state["config"]),
+            )
+            state["discussion_cache"].put(note_id, content, language, generated)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not create discussion summary: {exc}",
+            ) from exc
+        return generated, False
+
+    @app.get("/api/note")
+    def note(path: str):
+        _, content = read_note(path)
+        configured_language = next(
+            (
+                item for item in SUMMARY_LANGUAGES
+                if item.casefold() == state["config"].notes_language.casefold()
+            ),
+            "English",
+        )
+        return {
+            "path": path,
+            "content": content,
+            "notes_language": configured_language,
+        }
+
+    @app.post("/api/note/discussion")
+    def discussion(request: DiscussionRequest):
+        summary, cached = get_discussion(
+            request.path,
+            request.language,
+            request.regenerate,
+        )
+        return {
+            "path": request.path,
+            "language": summary_language(request.language),
+            "content": summary,
+            "cached": cached,
+        }
+
+    def make_pdf(
+        path: str,
+        view: str = "minutes",
+        language: str = "English",
+    ) -> Path:
+        try:
+            options = {}
+            if view == "discussion":
+                language = summary_language(language)
+                target, content = read_note(path)
+                summary, _ = get_discussion(path, language)
+                options = {
+                    "markdown_override": discussion_pdf_markdown(
+                        content, target.stem, summary
+                    ),
+                    "filename_suffix": f"Discussion Summary - {language}",
+                    "brief_label": f"{language} Discussion Summary",
+                    "show_metrics": False,
+                }
+            elif view != "minutes":
+                raise HTTPException(status_code=422, detail=f"Unsupported view: {view}")
             return export_meeting_pdf(
                 Path(state["config"].notes_path),
                 path,
                 state["pdf_export_dir"],
+                **options,
             )
+        except HTTPException:
+            raise
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except FileNotFoundError as exc:
@@ -223,12 +326,16 @@ def create_app(
 
     @app.post("/api/note/pdf")
     def create_note_pdf(request: NoteRequest):
-        target = make_pdf(request.path)
+        target = make_pdf(request.path, request.view, request.language)
         return {"pdf_path": str(target), "filename": target.name}
 
     @app.get("/api/note/pdf")
-    def download_note_pdf(path: str):
-        target = make_pdf(path)
+    def download_note_pdf(
+        path: str,
+        view: str = "minutes",
+        language: str = "English",
+    ):
+        target = make_pdf(path, view, language)
         return FileResponse(
             target,
             media_type="application/pdf",
@@ -237,7 +344,7 @@ def create_app(
 
     @app.post("/api/note/share")
     def share_note_pdf(request: NoteRequest):
-        target = make_pdf(request.path)
+        target = make_pdf(request.path, request.view, request.language)
         try:
             state["pdf_sharer"](target)
         except OSError as exc:

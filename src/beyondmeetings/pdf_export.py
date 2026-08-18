@@ -167,10 +167,11 @@ def _pdf_text(text: str, unicode_font: bool) -> str:
     return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
-def _output_name(note: Path) -> str:
+def _output_name(note: Path, suffix: str = "") -> str:
     stem = UNSAFE_FILENAME.sub("-", note.stem).strip(" .") or "Meeting"
     dated = f"{stem} - {note.parent.name}" if DATE_FOLDER.match(note.parent.name) else stem
-    return f"{dated}.pdf"
+    clean_suffix = UNSAFE_FILENAME.sub("-", suffix).strip(" .")
+    return f"{dated}{f' - {clean_suffix}' if clean_suffix else ''}.pdf"
 
 
 def _display_date(value: str) -> tuple[str, str]:
@@ -199,6 +200,10 @@ def export_meeting_pdf(
     library: Path,
     requested: str,
     export_dir: Path | None = None,
+    markdown_override: str | None = None,
+    filename_suffix: str = "",
+    brief_label: str = "AI MEETING BRIEF",
+    show_metrics: bool = True,
 ) -> Path:
     """Render one safely-resolved Markdown meeting into a branded PDF brief."""
     try:
@@ -214,10 +219,13 @@ def export_meeting_pdf(
         raise FileNotFoundError(f"Note not found: {requested}")
     destination = Path(export_dir or default_pdf_export_dir())
     destination.mkdir(parents=True, exist_ok=True)
-    target = destination / _output_name(note)
+    target = destination / _output_name(note, filename_suffix)
 
     document = parse_meeting_markdown(
-        note.read_text(encoding="utf-8", errors="replace"), note.stem
+        markdown_override
+        if markdown_override is not None
+        else note.read_text(encoding="utf-8", errors="replace"),
+        note.stem,
     )
     regular, bold = _font_files()
     unicode_font = regular is not None
@@ -394,7 +402,10 @@ def export_meeting_pdf(
     pdf.cell(50, 5, "BEYONDMEETINGS", new_x=XPos.LEFT, new_y=YPos.NEXT)
     pdf.set_x(x + 15)
     font(6.8, True, INDIGO)
-    pdf.cell(50, 4, "AI MEETING BRIEF", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(
+        70, 4, _pdf_text(brief_label.upper(), unicode_font),
+        new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+    )
 
     date_value = str(document.metadata.get("recorded_at") or document.metadata.get("date") or "")
     date_label, time_label = _display_date(date_value)
@@ -421,26 +432,33 @@ def export_meeting_pdf(
     actions = document.section("Action Items")
     questions = document.section("Open Questions")
     risks = document.section("Risks / Concerns")
-    metrics = [
-        (str(len(decisions.items) if decisions else 0), "DECISIONS"),
-        (str(len(actions.items) if actions else 0), "ACTIONS"),
-        (str(len(questions.items) if questions else 0), "QUESTIONS"),
-        (str(len(risks.items) if risks else 0), "RISKS"),
-    ]
-    gap = 3
-    metric_width = (pdf.epw - gap * 3) / 4
-    metric_y = pdf.get_y()
-    for index, (value, label) in enumerate(metrics):
-        mx = pdf.l_margin + index * (metric_width + gap)
-        pdf.set_fill_color(*(INDIGO_PALE if index < 2 else BLUE_PALE))
-        pdf.rounded_rect(mx, metric_y, metric_width, 19, 3, style="F")
-        pdf.set_xy(mx, metric_y + 3)
-        font(15, True, INDIGO_DARK)
-        pdf.cell(metric_width, 7, value, align="C", new_x=XPos.LEFT, new_y=YPos.NEXT)
-        pdf.set_x(mx)
-        font(6.5, True, MUTED)
-        pdf.cell(metric_width, 5, label, align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.set_y(metric_y + 25)
+    if show_metrics:
+        metrics = [
+            (str(len(decisions.items) if decisions else 0), "DECISIONS"),
+            (str(len(actions.items) if actions else 0), "ACTIONS"),
+            (str(len(questions.items) if questions else 0), "QUESTIONS"),
+            (str(len(risks.items) if risks else 0), "RISKS"),
+        ]
+        gap = 3
+        metric_width = (pdf.epw - gap * 3) / 4
+        metric_y = pdf.get_y()
+        for index, (value, label) in enumerate(metrics):
+            mx = pdf.l_margin + index * (metric_width + gap)
+            pdf.set_fill_color(*(INDIGO_PALE if index < 2 else BLUE_PALE))
+            pdf.rounded_rect(mx, metric_y, metric_width, 19, 3, style="F")
+            pdf.set_xy(mx, metric_y + 3)
+            font(15, True, INDIGO_DARK)
+            pdf.cell(
+                metric_width, 7, value, align="C",
+                new_x=XPos.LEFT, new_y=YPos.NEXT,
+            )
+            pdf.set_x(mx)
+            font(6.5, True, MUTED)
+            pdf.cell(
+                metric_width, 5, label, align="C",
+                new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+            )
+        pdf.set_y(metric_y + 25)
 
     summary = document.section("Executive Summary")
     if summary and summary.paragraphs:

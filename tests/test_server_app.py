@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from beyondmeetings.config import Config
-from beyondmeetings.server import NoteRequest, create_app
+from beyondmeetings.server import DiscussionRequest, NoteRequest, create_app
 from beyondmeetings.vault.scaffold import scaffold_vault
 
 IDLE = {
@@ -75,6 +75,9 @@ def test_app_page_includes_pdf_and_share_actions(app_and_session):
     page = route_endpoint(client.app, "/", "GET")()
     assert 'id="convertPdf"' in page
     assert 'id="sharePdf"' in page
+    assert 'id="minutesView"' in page
+    assert 'id="discussionView"' in page
+    assert 'id="summaryLanguage"' in page
 
 
 def test_setup_still_serves_the_wizard(app_and_session):
@@ -189,6 +192,59 @@ def test_meeting_note_can_be_exported_and_downloaded_as_pdf(app_and_session):
     downloaded = download_pdf("Meetings/2026-07-30/Standup")
     assert downloaded.media_type == "application/pdf"
     assert Path(downloaded.path).read_bytes().startswith(b"%PDF")
+
+
+def test_discussion_summary_is_generated_cached_and_exported(app_and_session,
+                                                              monkeypatch):
+    client, _, vault = app_and_session
+    note = vault / "Meetings" / "2026-07-30" / "Standup.md"
+    note.parent.mkdir(parents=True)
+    note.write_text(
+        "---\ndate: 2026-07-30\n---\n\n# Standup\n\n"
+        "## Executive Summary\nWe compared launch options.\n"
+    )
+
+    from beyondmeetings import server as server_mod
+    from beyondmeetings.models import MeetingNote
+
+    calls = []
+
+    class Stub:
+        def analyse(self, prompt, valid_candidate_ids=None):
+            calls.append(prompt)
+            return MeetingNote(
+                title="Discussion Summary",
+                date="2026-01-01",
+                executive_summary=(
+                    "## Discussion Overview\n\nहमने विकल्पों पर चर्चा की।\n\n"
+                    "## Main Themes\n- लॉन्च\n\n"
+                    "## Important Context\nसमय महत्वपूर्ण था।"
+                ),
+            )
+
+    monkeypatch.setattr(server_mod, "build_provider", lambda config: Stub())
+    endpoint = route_endpoint(client.app, "/api/note/discussion", "POST")
+    request = DiscussionRequest(
+        path="Meetings/2026-07-30/Standup",
+        language="Hindi",
+    )
+    generated = endpoint(request)
+    cached = endpoint(request)
+
+    assert generated["cached"] is False
+    assert cached["cached"] is True
+    assert "चर्चा" in cached["content"]
+    assert len(calls) == 1
+
+    create_pdf = route_endpoint(client.app, "/api/note/pdf", "POST")
+    exported = create_pdf(NoteRequest(
+        path="Meetings/2026-07-30/Standup",
+        view="discussion",
+        language="Hindi",
+    ))
+    target = Path(exported["pdf_path"])
+    assert target.name == "Standup - 2026-07-30 - Discussion Summary - Hindi.pdf"
+    assert target.read_bytes().startswith(b"%PDF")
 
 
 def test_share_reveals_the_generated_pdf(tmp_path):

@@ -34,6 +34,28 @@ def test_export_renders_markdown_as_a_real_pdf(tmp_path):
     assert target.stat().st_size > 1_000
 
 
+def test_export_can_render_a_separately_named_discussion_summary(tmp_path):
+    note = tmp_path / "vault" / "Meetings" / "2026-08-18" / "Review.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("# Review\n\n## Executive Summary\nMinutes.\n")
+
+    target = export_meeting_pdf(
+        tmp_path / "vault",
+        "Meetings/2026-08-18/Review",
+        tmp_path / "exports",
+        markdown_override=(
+            "# Review — Discussion Summary\n\n"
+            "## Executive Summary\nThe discussion focused on timing.\n"
+        ),
+        filename_suffix="Discussion Summary - English",
+        brief_label="English Discussion Summary",
+        show_metrics=False,
+    )
+
+    assert target.name == "Review - 2026-08-18 - Discussion Summary - English.pdf"
+    assert target.read_bytes().startswith(b"%PDF")
+
+
 def test_export_refuses_a_note_outside_the_library(tmp_path):
     with pytest.raises(ValueError, match="outside"):
         export_meeting_pdf(tmp_path / "vault", "../../secret", tmp_path / "exports")

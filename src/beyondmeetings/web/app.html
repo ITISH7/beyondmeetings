@@ -157,6 +157,36 @@
         <button id="closeViewer" class="iconBtn" type="button" aria-label="Close note">×</button>
       </div>
     </header>
+    <div class="viewerTabsBar">
+      <nav class="viewerTabs" aria-label="Meeting note views">
+        <button id="minutesView" class="viewerTab active" type="button">
+          Minutes of Meeting
+        </button>
+        <button id="discussionView" class="viewerTab" type="button">
+          <span aria-hidden="true">✦</span> Discussion Summary
+        </button>
+      </nav>
+      <label id="summaryLanguageWrap" class="summaryLanguage" hidden>
+        <span>Translate to</span>
+        <select id="summaryLanguage" aria-label="Discussion summary language">
+          <option>English</option>
+          <option>Hindi</option>
+          <option>Hinglish</option>
+          <option>Bengali</option>
+          <option>Marathi</option>
+          <option>Gujarati</option>
+          <option>Tamil</option>
+          <option>Telugu</option>
+          <option>Kannada</option>
+          <option>Malayalam</option>
+          <option>Spanish</option>
+          <option>French</option>
+          <option>German</option>
+          <option>Portuguese</option>
+          <option>Arabic</option>
+        </select>
+      </label>
+    </div>
     <div id="viewerStatus" class="viewerStatus" aria-live="polite" hidden></div>
     <article id="noteBody" class="noteBody"></article>
   </dialog>
