@@ -288,7 +288,7 @@ def create_app(
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         note_id = str(target.relative_to(Path(state["config"].notes_path).resolve()))
-        cache_id = f"{note_id}::speaker-chat-v1"
+        cache_id = f"{note_id}::speaker-chat-v2"
         if not regenerate:
             cached = state["translation_cache"].get(cache_id, transcript, language)
             if cached:
@@ -387,8 +387,8 @@ def create_app(
                         translated,
                         language,
                     ),
-                    "filename_suffix": f"Translated Transcript - {language}",
-                    "brief_label": f"{language} Full Transcript",
+                    "filename_suffix": f"Conversation Transcript - {language}",
+                    "brief_label": f"{language} Full Conversation",
                     "show_metrics": False,
                 }
             elif view != "minutes":

@@ -94,7 +94,16 @@ def build_translation_prompt(
     index: int,
     total: int,
 ) -> str:
-    return f"""Translate the transcript chunk below into {language}.
+    language_guidance = (
+        "Write in natural conversational Hinglish using Roman script for Hindi "
+        "and retaining English words where the speakers used them. Preserve the "
+        "informal tone and code-switching; do not turn it into formal Hindi or English."
+        if language == "Hinglish"
+        else f"Translate the transcript naturally into {language}."
+    )
+    return f"""Render the transcript chunk below in {language}.
+
+{language_guidance}
 
 This is chunk {index} of {total}. Translate EVERY utterance. Do not summarize,
 shorten, omit, censor, reorganize, explain, or add information. Preserve names,
@@ -112,7 +121,7 @@ within this chunk. Every output line MUST use exactly this format:
 
 Return ONLY one JSON object with these fields:
 {{
-  "title": "Translated Transcript",
+  "title": "Conversation Transcript",
   "date": "2026-01-01",
   "executive_summary": "the complete translated chunk, with no commentary"
 }}
@@ -178,6 +187,6 @@ def translation_pdf_markdown(
     title_match = NOTE_TITLE.search(note_markdown)
     title = title_match.group(1).strip() if title_match else fallback_title
     return (
-        f"{metadata}# {title} — Translated Transcript\n\n"
-        f"## Full Transcript · {language}\n\n{translated.strip()}\n"
+        f"{metadata}# {title} — Conversation Transcript\n\n"
+        f"## Full Conversation · {language}\n\n{translated.strip()}\n"
     )

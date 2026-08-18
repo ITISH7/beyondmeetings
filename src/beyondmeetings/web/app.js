@@ -288,11 +288,7 @@ async function openNote(path, title, meeting = null) {
     currentNotesLanguage = note.notes_language || "English";
     discussionSummaries.clear();
     translatedTranscripts.clear();
-    if ([...$("translationLanguage").options].some((option) => option.value === note.notes_language)) {
-      $("translationLanguage").value = note.notes_language;
-    } else {
-      $("translationLanguage").value = "English";
-    }
+    $("translationLanguage").value = "Hinglish";
     $("viewerTitle").textContent = title || "Meeting note";
     $("viewerDate").textContent = meeting
       ? `${longDate(meeting.date)} · ${meetingTime(meeting.recorded_at)}`
@@ -337,10 +333,10 @@ function renderTranscript(result, language) {
   const body = $("noteBody");
   body.replaceChildren();
   const title = document.createElement("h1");
-  title.textContent = "Translated Transcript";
+  title.textContent = "Conversation Transcript";
   const meta = document.createElement("div");
   meta.className = "transcriptMeta";
-  meta.textContent = `${language} · Complete conversation · AI-estimated speakers`;
+  meta.textContent = `${language} · Full conversation · AI-estimated speakers`;
   body.append(title, meta);
 
   if (!turns.length) {
@@ -391,7 +387,7 @@ async function showNoteView(view) {
       return;
     }
 
-    noteLoading("Translating the complete transcript without summarizing or omitting speech…");
+    noteLoading(`Preparing the complete conversation in ${language} without summarizing…`);
     try {
       let request = translationRequests.get(cacheKey);
       if (!request) {
@@ -511,7 +507,7 @@ async function shareCurrentPdf(button) {
         const shareData = {
           title: $("viewerTitle").textContent,
           text: currentNoteView === "translation"
-            ? `Complete translated meeting transcript in ${request.language} from BeyondMeetings`
+            ? `Complete meeting conversation in ${request.language} from BeyondMeetings`
             : currentNoteView === "discussion"
               ? "Meeting discussion summary from BeyondMeetings"
               : "Meeting minutes from BeyondMeetings",

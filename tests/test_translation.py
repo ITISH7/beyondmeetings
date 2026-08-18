@@ -78,6 +78,13 @@ def test_translation_prompt_forbids_summarising_or_omitting_speech():
     assert "Person A: complete translated utterance" in prompt
 
 
+def test_hinglish_prompt_preserves_natural_code_switching():
+    prompt = build_translation_prompt("Kal deploy karenge", "Hinglish", 1, 1)
+    assert "natural conversational Hinglish" in prompt
+    assert "Roman script for Hindi" in prompt
+    assert "do not turn it into formal Hindi or English" in prompt
+
+
 def test_labelled_translation_is_parsed_into_chat_turns():
     turns = parse_translation_turns(
         "Person A: Shall we ship today?\n"
@@ -98,6 +105,6 @@ def test_labelled_translation_is_parsed_into_chat_turns():
 def test_translation_pdf_contains_full_transcript_section():
     note = '---\ndate: 2026-08-18\n---\n\n# Review\n'
     result = translation_pdf_markdown(note, "Fallback", "Translated words", "Hindi")
-    assert "# Review — Translated Transcript" in result
-    assert "## Full Transcript · Hindi" in result
+    assert "# Review — Conversation Transcript" in result
+    assert "## Full Conversation · Hindi" in result
     assert "Translated words" in result

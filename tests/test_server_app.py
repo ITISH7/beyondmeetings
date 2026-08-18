@@ -86,7 +86,7 @@ def test_app_page_includes_pdf_and_share_actions(app_and_session):
     assert 'id="translationLanguage"' in page
     assert "Decisions and action items" in page
     assert "Topics, reasoning and context" in page
-    assert "Complete conversation" in page
+    assert "Full conversation in Hinglish" in page
 
 
 def test_ai_tabs_stay_clickable_while_background_work_runs(app_and_session):
@@ -327,7 +327,7 @@ def test_full_transcript_is_translated_cached_and_exported(
         language="Hindi",
     ))
     target = Path(exported["pdf_path"])
-    assert target.name == "Standup - 2026-07-30 - Translated Transcript - Hindi.pdf"
+    assert target.name == "Standup - 2026-07-30 - Conversation Transcript - Hindi.pdf"
     assert target.read_bytes().startswith(b"%PDF")
 
 
