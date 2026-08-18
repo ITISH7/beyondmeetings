@@ -36,6 +36,7 @@ from .pipeline import generate_notes
 from .session import SessionManager
 from .translation import (
     TranslationCache,
+    parse_translation_turns,
     resolve_meeting_transcript,
     translate_transcript,
     translation_pdf_markdown,
@@ -287,8 +288,9 @@ def create_app(
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         note_id = str(target.relative_to(Path(state["config"].notes_path).resolve()))
+        cache_id = f"{note_id}::speaker-chat-v1"
         if not regenerate:
-            cached = state["translation_cache"].get(note_id, transcript, language)
+            cached = state["translation_cache"].get(cache_id, transcript, language)
             if cached:
                 return cached, True
         try:
@@ -298,7 +300,7 @@ def create_app(
                 build_provider(state["config"]),
             )
             state["translation_cache"].put(
-                note_id,
+                cache_id,
                 transcript,
                 language,
                 translated,
@@ -351,6 +353,7 @@ def create_app(
             "path": request.path,
             "language": summary_language(request.language),
             "content": translated,
+            "turns": parse_translation_turns(translated),
             "cached": cached,
         }
 

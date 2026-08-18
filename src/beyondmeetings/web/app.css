@@ -458,6 +458,13 @@ button.taskCard:hover { border-color: var(--accent); }
 .noteBody .byline { color: var(--muted); font-size: 11px; }
 .transcriptMeta { display: inline-flex; margin-bottom: 18px; padding: 6px 9px; border-radius: 999px; background: var(--indigo-soft, var(--surface-soft)); color: var(--accent); font-size: 10.5px; font-weight: 700; }
 .transcriptText { padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); font-size: 13px; line-height: 1.75; overflow-wrap: anywhere; white-space: pre-wrap; }
+.chatTranscript { display: flex; flex-direction: column; gap: 13px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--surface-soft) 88%, var(--accent) 12%); }
+.transcriptMessage { display: flex; max-width: 84%; flex-direction: column; gap: 4px; }
+.transcriptMessage.left { align-self: flex-start; align-items: flex-start; }
+.transcriptMessage.right { align-self: flex-end; align-items: flex-end; }
+.transcriptSpeaker { padding: 0 7px; color: var(--muted); font-size: 10px; }
+.transcriptBubble { padding: 10px 13px; border: 1px solid var(--line); border-radius: 4px 14px 14px; background: var(--surface); font-size: 13px; line-height: 1.62; overflow-wrap: anywhere; white-space: pre-wrap; box-shadow: 0 2px 8px rgba(24, 35, 58, .05); }
+.transcriptMessage.right .transcriptBubble { border-color: color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius: 14px 4px 14px 14px; background: color-mix(in srgb, var(--surface) 86%, var(--accent) 14%); }
 
 @media (max-width: 760px) {
   body { padding: 20px 16px 44px; }

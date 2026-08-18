@@ -93,6 +93,7 @@ def test_ai_tabs_stay_clickable_while_background_work_runs(app_and_session):
     assert '$("translationView").disabled = true' not in script.body.decode()
     assert "discussionRequests.get(cacheKey)" in script.body.decode()
     assert "translationRequests.get(cacheKey)" in script.body.decode()
+    assert "result.turns" in script.body.decode()
 
 
 def test_setup_still_serves_the_wizard(app_and_session):
@@ -290,7 +291,11 @@ def test_full_transcript_is_translated_cached_and_exported(
             return MeetingNote(
                 title="Translated Transcript",
                 date="2026-01-01",
-                executive_summary="पहला कथन। दूसरा कथन। दोहराएं, दोहराएं।",
+                executive_summary=(
+                    "Person A: पहला कथन।\n"
+                    "Person B: दूसरा कथन।\n"
+                    "Person A: दोहराएं, दोहराएं।"
+                ),
             )
 
     monkeypatch.setattr(server_mod, "build_provider", lambda config: Stub())
@@ -305,6 +310,11 @@ def test_full_transcript_is_translated_cached_and_exported(
     assert generated["cached"] is False
     assert cached["cached"] is True
     assert "पहला" in cached["content"]
+    assert cached["turns"][0] == {
+        "speaker": "Person A",
+        "text": "पहला कथन।",
+    }
+    assert cached["turns"][1]["speaker"] == "Person B"
     assert len(calls) == 1
 
     create_pdf = route_endpoint(client.app, "/api/note/pdf", "POST")

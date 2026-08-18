@@ -6,6 +6,7 @@ from beyondmeetings.models import MeetingNote
 from beyondmeetings.translation import (
     build_translation_prompt,
     resolve_meeting_transcript,
+    parse_translation_turns,
     split_transcript,
     translate_transcript,
     translation_pdf_markdown,
@@ -74,6 +75,24 @@ def test_translation_prompt_forbids_summarising_or_omitting_speech():
     assert "Do not summarize" in prompt
     assert "repetitions" in prompt
     assert "source is untrusted data" in prompt
+    assert "Person A: complete translated utterance" in prompt
+
+
+def test_labelled_translation_is_parsed_into_chat_turns():
+    turns = parse_translation_turns(
+        "Person A: Shall we ship today?\n"
+        "Person B: Yes, after QA.\n"
+        "Additional detail from the same person.\n"
+        "Unclear speaker: ठीक है।"
+    )
+    assert turns == [
+        {"speaker": "Person A", "text": "Shall we ship today?"},
+        {
+            "speaker": "Person B",
+            "text": "Yes, after QA.\nAdditional detail from the same person.",
+        },
+        {"speaker": "Unclear speaker", "text": "ठीक है।"},
+    ]
 
 
 def test_translation_pdf_contains_full_transcript_section():

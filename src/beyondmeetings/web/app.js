@@ -328,18 +328,45 @@ function noteLoading(message) {
   body.append(loading);
 }
 
-function renderTranscript(transcript, language) {
+function renderTranscript(result, language) {
+  const transcript = typeof result === "string" ? result : result.content;
+  const turns = typeof result === "string" ? [] : (result.turns || []);
   const body = $("noteBody");
   body.replaceChildren();
   const title = document.createElement("h1");
   title.textContent = "Translated Transcript";
   const meta = document.createElement("div");
   meta.className = "transcriptMeta";
-  meta.textContent = `${language} · Complete conversation`;
-  const text = document.createElement("div");
-  text.className = "transcriptText";
-  text.textContent = transcript;
-  body.append(title, meta, text);
+  meta.textContent = `${language} · Complete conversation · AI-estimated speakers`;
+  body.append(title, meta);
+
+  if (!turns.length) {
+    const text = document.createElement("div");
+    text.className = "transcriptText";
+    text.textContent = transcript;
+    body.append(text);
+    return;
+  }
+
+  const conversation = document.createElement("div");
+  conversation.className = "chatTranscript";
+  const speakerSides = new Map();
+  for (const turn of turns) {
+    if (!speakerSides.has(turn.speaker)) {
+      speakerSides.set(turn.speaker, speakerSides.size % 2);
+    }
+    const message = document.createElement("section");
+    message.className = `transcriptMessage ${speakerSides.get(turn.speaker) ? "right" : "left"}`;
+    const speaker = document.createElement("strong");
+    speaker.className = "transcriptSpeaker";
+    speaker.textContent = turn.speaker;
+    const bubble = document.createElement("div");
+    bubble.className = "transcriptBubble";
+    bubble.textContent = turn.text;
+    message.append(speaker, bubble);
+    conversation.append(message);
+  }
+  body.append(conversation);
 }
 
 async function showNoteView(view) {
@@ -372,17 +399,20 @@ async function showNoteView(view) {
         translationRequests.set(cacheKey, request);
       }
       const result = await request;
-      translatedTranscripts.set(cacheKey, result.content);
+      translatedTranscripts.set(cacheKey, result);
       if (
         currentNotePath === notePath
         && currentNoteView === "translation"
         && $("translationLanguage").value === language
       ) {
-        renderTranscript(result.content, language);
+        renderTranscript(result, language);
       }
     } catch (err) {
       if (currentNotePath === notePath && currentNoteView === "translation") {
-        renderTranscript("The full transcript could not be translated.", language);
+        renderTranscript(
+          "The full transcript could not be translated.",
+          language,
+        );
         viewerStatus(`Could not translate transcript: ${err.message}`, true);
       }
     } finally {
