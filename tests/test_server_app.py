@@ -5,7 +5,12 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from beyondmeetings.config import Config
-from beyondmeetings.server import DiscussionRequest, NoteRequest, create_app
+from beyondmeetings.server import (
+    DiscussionRequest,
+    NoteRequest,
+    TranslationRequest,
+    create_app,
+)
 from beyondmeetings.vault.scaffold import scaffold_vault
 
 IDLE = {
@@ -77,7 +82,8 @@ def test_app_page_includes_pdf_and_share_actions(app_and_session):
     assert 'id="sharePdf"' in page
     assert 'id="minutesView"' in page
     assert 'id="discussionView"' in page
-    assert 'id="summaryLanguage"' in page
+    assert 'id="translationView"' in page
+    assert 'id="translationLanguage"' in page
 
 
 def test_setup_still_serves_the_wizard(app_and_session):
@@ -244,6 +250,62 @@ def test_discussion_summary_is_generated_cached_and_exported(app_and_session,
     ))
     target = Path(exported["pdf_path"])
     assert target.name == "Standup - 2026-07-30 - Discussion Summary - Hindi.pdf"
+    assert target.read_bytes().startswith(b"%PDF")
+
+
+def test_full_transcript_is_translated_cached_and_exported(
+    app_and_session,
+    monkeypatch,
+    tmp_path,
+):
+    client, _, vault = app_and_session
+    note = vault / "Meetings" / "2026-07-30" / "Standup.md"
+    note.parent.mkdir(parents=True)
+    note.write_text(
+        "---\ndate: 2026-07-30\n"
+        "transcript: 2026-07-30/recording.txt\n---\n\n"
+        "# Standup\n\n## Executive Summary\nWe talked.\n"
+    )
+    transcript = tmp_path / "data" / "transcripts" / "2026-07-30" / "recording.txt"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text("First statement. Second statement. Repeat, repeat.")
+
+    from beyondmeetings import server as server_mod
+    from beyondmeetings.models import MeetingNote
+
+    calls = []
+
+    class Stub:
+        def analyse(self, prompt, valid_candidate_ids=None):
+            calls.append(prompt)
+            return MeetingNote(
+                title="Translated Transcript",
+                date="2026-01-01",
+                executive_summary="पहला कथन। दूसरा कथन। दोहराएं, दोहराएं।",
+            )
+
+    monkeypatch.setattr(server_mod, "build_provider", lambda config: Stub())
+    endpoint = route_endpoint(client.app, "/api/note/translation", "POST")
+    request = TranslationRequest(
+        path="Meetings/2026-07-30/Standup",
+        language="Hindi",
+    )
+    generated = endpoint(request)
+    cached = endpoint(request)
+
+    assert generated["cached"] is False
+    assert cached["cached"] is True
+    assert "पहला" in cached["content"]
+    assert len(calls) == 1
+
+    create_pdf = route_endpoint(client.app, "/api/note/pdf", "POST")
+    exported = create_pdf(NoteRequest(
+        path="Meetings/2026-07-30/Standup",
+        view="translation",
+        language="Hindi",
+    ))
+    target = Path(exported["pdf_path"])
+    assert target.name == "Standup - 2026-07-30 - Translated Transcript - Hindi.pdf"
     assert target.read_bytes().startswith(b"%PDF")
 
 

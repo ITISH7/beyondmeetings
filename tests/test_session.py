@@ -150,6 +150,7 @@ def test_stop_preserves_when_the_meeting_was_recorded(manager, tmp_path):
     manager.run_stop()
     note = tmp_path / "vault" / "Meetings" / "2026-07-30" / "Test Meeting.md"
     assert 'recorded_at: "2026-07-30T10:00:00"' in note.read_text()
+    assert "transcript: 2026-07-30/2026-07-30_10-00_test1.txt" in note.read_text()
 
 
 def test_stop_writes_the_transcript_to_the_data_dir(manager, tmp_path):

@@ -438,8 +438,8 @@ button.taskCard:hover { border-color: var(--accent); }
 .viewerButton:disabled { opacity: .55; cursor: wait; }
 .iconBtn { width: 34px; height: 34px; border: 0; border-radius: 9px; background: var(--surface-soft); color: var(--muted); font-size: 23px; cursor: pointer; }
 .viewerTabsBar { position: sticky; top: 63px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 20px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 96%, transparent); backdrop-filter: blur(12px); }
-.viewerTabs { display: flex; align-self: stretch; gap: 18px; }
-.viewerTab { position: relative; padding: 13px 1px 12px; border: 0; background: transparent; color: var(--muted); font-size: 11.5px; font-weight: 680; cursor: pointer; }
+.viewerTabs { display: flex; align-self: stretch; gap: 18px; overflow-x: auto; }
+.viewerTab { position: relative; flex: 0 0 auto; padding: 13px 1px 12px; border: 0; background: transparent; color: var(--muted); font-size: 11.5px; font-weight: 680; white-space: nowrap; cursor: pointer; }
 .viewerTab::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; border-radius: 2px 2px 0 0; background: transparent; content: ""; }
 .viewerTab:hover, .viewerTab.active { color: var(--accent); }
 .viewerTab.active::after { background: var(--accent); }
@@ -456,6 +456,8 @@ button.taskCard:hover { border-color: var(--accent); }
 .noteBody ul { padding-left: 21px; }
 .noteBody blockquote { margin: 14px 0; padding: 11px 14px; border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; background: var(--surface-soft); }
 .noteBody .byline { color: var(--muted); font-size: 11px; }
+.transcriptMeta { display: inline-flex; margin-bottom: 18px; padding: 6px 9px; border-radius: 999px; background: var(--indigo-soft, var(--surface-soft)); color: var(--accent); font-size: 10.5px; font-weight: 700; }
+.transcriptText { padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); font-size: 13px; line-height: 1.75; overflow-wrap: anywhere; white-space: pre-wrap; }
 
 @media (max-width: 760px) {
   body { padding: 20px 16px 44px; }

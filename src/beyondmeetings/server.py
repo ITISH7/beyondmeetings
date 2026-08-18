@@ -34,6 +34,12 @@ from .pdf_export import (
 )
 from .pipeline import generate_notes
 from .session import SessionManager
+from .translation import (
+    TranslationCache,
+    resolve_meeting_transcript,
+    translate_transcript,
+    translation_pdf_markdown,
+)
 
 WEB_DIR = Path(__file__).parent / "web"
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1", "testserver"}
@@ -85,11 +91,17 @@ class RegenerateRequest(BaseModel, extra="forbid"):
 
 class NoteRequest(BaseModel, extra="forbid"):
     path: str
-    view: Literal["minutes", "discussion"] = "minutes"
+    view: Literal["minutes", "discussion", "translation"] = "minutes"
     language: str = Field(default="English", min_length=1, max_length=30)
 
 
 class DiscussionRequest(BaseModel, extra="forbid"):
+    path: str
+    language: str = Field(default="English", min_length=1, max_length=30)
+    regenerate: bool = False
+
+
+class TranslationRequest(BaseModel, extra="forbid"):
     path: str
     language: str = Field(default="English", min_length=1, max_length=30)
     regenerate: bool = False
@@ -116,6 +128,9 @@ def create_app(
         "pdf_sharer": pdf_sharer or reveal_pdf_for_sharing,
         "discussion_cache": DiscussionCache(
             Path(initial_config.data_dir) / "discussion-summaries"
+        ),
+        "translation_cache": TranslationCache(
+            Path(initial_config.data_dir) / "translated-transcripts"
         ),
     }
     factory = checks_factory or (
@@ -256,6 +271,45 @@ def create_app(
             ) from exc
         return generated, False
 
+    def get_translation(
+        path: str,
+        language: str,
+        regenerate: bool = False,
+    ) -> tuple[str, bool]:
+        language = summary_language(language)
+        target, note_content = read_note(path)
+        try:
+            transcript_path = resolve_meeting_transcript(
+                note_content,
+                Path(state["config"].data_dir),
+            )
+            transcript = transcript_path.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        note_id = str(target.relative_to(Path(state["config"].notes_path).resolve()))
+        if not regenerate:
+            cached = state["translation_cache"].get(note_id, transcript, language)
+            if cached:
+                return cached, True
+        try:
+            translated = translate_transcript(
+                transcript,
+                language,
+                build_provider(state["config"]),
+            )
+            state["translation_cache"].put(
+                note_id,
+                transcript,
+                language,
+                translated,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not translate the full transcript: {exc}",
+            ) from exc
+        return translated, False
+
     @app.get("/api/note")
     def note(path: str):
         _, content = read_note(path)
@@ -286,6 +340,20 @@ def create_app(
             "cached": cached,
         }
 
+    @app.post("/api/note/translation")
+    def translation(request: TranslationRequest):
+        translated, cached = get_translation(
+            request.path,
+            request.language,
+            request.regenerate,
+        )
+        return {
+            "path": request.path,
+            "language": summary_language(request.language),
+            "content": translated,
+            "cached": cached,
+        }
+
     def make_pdf(
         path: str,
         view: str = "minutes",
@@ -303,6 +371,21 @@ def create_app(
                     ),
                     "filename_suffix": f"Discussion Summary - {language}",
                     "brief_label": f"{language} Discussion Summary",
+                    "show_metrics": False,
+                }
+            elif view == "translation":
+                language = summary_language(language)
+                target, content = read_note(path)
+                translated, _ = get_translation(path, language)
+                options = {
+                    "markdown_override": translation_pdf_markdown(
+                        content,
+                        target.stem,
+                        translated,
+                        language,
+                    ),
+                    "filename_suffix": f"Translated Transcript - {language}",
+                    "brief_label": f"{language} Full Transcript",
                     "show_metrics": False,
                 }
             elif view != "minutes":
@@ -399,6 +482,7 @@ def create_app(
                 path.read_text(encoding="utf-8"),
                 state["config"],
                 build_provider(state["config"]),
+                transcript_ref=str(path.resolve().relative_to(transcripts)),
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

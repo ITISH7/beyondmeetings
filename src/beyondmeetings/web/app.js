@@ -6,7 +6,9 @@ let lastCompletedPath = null;
 let currentNotePath = null;
 let currentNoteContent = "";
 let currentNoteView = "minutes";
+let currentNotesLanguage = "English";
 const discussionSummaries = new Map();
+const translatedTranscripts = new Map();
 
 async function api(path, body) {
   const options = body === undefined ? {} : {
@@ -281,11 +283,13 @@ async function openNote(path, title, meeting = null) {
     currentNotePath = path;
     currentNoteContent = note.content;
     currentNoteView = "minutes";
+    currentNotesLanguage = note.notes_language || "English";
     discussionSummaries.clear();
-    if ([...$("summaryLanguage").options].some((option) => option.value === note.notes_language)) {
-      $("summaryLanguage").value = note.notes_language;
+    translatedTranscripts.clear();
+    if ([...$("translationLanguage").options].some((option) => option.value === note.notes_language)) {
+      $("translationLanguage").value = note.notes_language;
     } else {
-      $("summaryLanguage").value = "English";
+      $("translationLanguage").value = "English";
     }
     $("viewerTitle").textContent = title || "Meeting note";
     $("viewerDate").textContent = meeting
@@ -304,10 +308,11 @@ async function openNote(path, title, meeting = null) {
 function updateViewerTabs() {
   $("minutesView").classList.toggle("active", currentNoteView === "minutes");
   $("discussionView").classList.toggle("active", currentNoteView === "discussion");
-  $("summaryLanguageWrap").hidden = currentNoteView !== "discussion";
+  $("translationView").classList.toggle("active", currentNoteView === "translation");
+  $("translationLanguageWrap").hidden = currentNoteView !== "translation";
 }
 
-function discussionLoading() {
+function noteLoading(message) {
   const body = $("noteBody");
   body.replaceChildren();
   const loading = document.createElement("div");
@@ -316,9 +321,23 @@ function discussionLoading() {
   const icon = document.createElement("span");
   icon.setAttribute("aria-hidden", "true");
   icon.textContent = "✦";
-  content.append(icon, "Creating a clear discussion summary in your chosen language…");
+  content.append(icon, message);
   loading.append(content);
   body.append(loading);
+}
+
+function renderTranscript(transcript, language) {
+  const body = $("noteBody");
+  body.replaceChildren();
+  const title = document.createElement("h1");
+  title.textContent = "Translated Transcript";
+  const meta = document.createElement("div");
+  meta.className = "transcriptMeta";
+  meta.textContent = `${language} · Complete conversation`;
+  const text = document.createElement("div");
+  text.className = "transcriptText";
+  text.textContent = transcript;
+  body.append(title, meta, text);
 }
 
 async function showNoteView(view) {
@@ -331,23 +350,54 @@ async function showNoteView(view) {
     return;
   }
 
-  const language = $("summaryLanguage").value;
+  if (view === "translation") {
+    const language = $("translationLanguage").value;
+    const cacheKey = `${currentNotePath}\n${language}`;
+    if (translatedTranscripts.has(cacheKey)) {
+      renderTranscript(translatedTranscripts.get(cacheKey), language);
+      return;
+    }
+
+    noteLoading("Translating the complete transcript without summarizing or omitting speech…");
+    $("translationView").disabled = true;
+    $("translationLanguage").disabled = true;
+    try {
+      const result = await api("/api/note/translation", {
+        path: currentNotePath,
+        language,
+      });
+      translatedTranscripts.set(cacheKey, result.content);
+      if (currentNoteView === "translation" && $("translationLanguage").value === language) {
+        renderTranscript(result.content, language);
+      }
+    } catch (err) {
+      if (currentNoteView === "translation") {
+        renderTranscript("The full transcript could not be translated.", language);
+        viewerStatus(`Could not translate transcript: ${err.message}`, true);
+      }
+    } finally {
+      $("translationView").disabled = false;
+      $("translationLanguage").disabled = false;
+    }
+    return;
+  }
+
+  const language = currentNotesLanguage;
   const cacheKey = `${currentNotePath}\n${language}`;
   if (discussionSummaries.has(cacheKey)) {
     renderMarkdown(discussionSummaries.get(cacheKey));
     return;
   }
 
-  discussionLoading();
+  noteLoading("Creating a clear discussion summary…");
   $("discussionView").disabled = true;
-  $("summaryLanguage").disabled = true;
   try {
     const result = await api("/api/note/discussion", {
       path: currentNotePath,
       language,
     });
     discussionSummaries.set(cacheKey, result.content);
-    if (currentNoteView === "discussion" && $("summaryLanguage").value === language) {
+    if (currentNoteView === "discussion") {
       renderMarkdown(result.content);
     }
   } catch (err) {
@@ -357,8 +407,13 @@ async function showNoteView(view) {
     }
   } finally {
     $("discussionView").disabled = false;
-    $("summaryLanguage").disabled = false;
   }
+}
+
+function activeExportLanguage() {
+  return currentNoteView === "translation"
+    ? $("translationLanguage").value
+    : currentNotesLanguage;
 }
 
 function viewerStatus(message, isError = false) {
@@ -377,7 +432,7 @@ async function createCurrentPdf(button) {
     const result = await api("/api/note/pdf", {
       path: currentNotePath,
       view: currentNoteView,
-      language: $("summaryLanguage").value,
+      language: activeExportLanguage(),
     });
     viewerStatus(`PDF saved to ${result.pdf_path}`);
     return result;
@@ -396,7 +451,7 @@ async function shareCurrentPdf(button) {
     const request = {
       path: currentNotePath,
       view: currentNoteView,
-      language: $("summaryLanguage").value,
+      language: activeExportLanguage(),
     };
     const created = await api("/api/note/pdf", request);
     if (typeof navigator.share === "function" && typeof File === "function") {
@@ -409,9 +464,11 @@ async function shareCurrentPdf(button) {
         });
         const shareData = {
           title: $("viewerTitle").textContent,
-          text: currentNoteView === "discussion"
-            ? `Meeting discussion summary in ${request.language} from BeyondMeetings`
-            : "Meeting minutes from BeyondMeetings",
+          text: currentNoteView === "translation"
+            ? `Complete translated meeting transcript in ${request.language} from BeyondMeetings`
+            : currentNoteView === "discussion"
+              ? "Meeting discussion summary from BeyondMeetings"
+              : "Meeting minutes from BeyondMeetings",
           files: [file],
         };
         const canShare = typeof navigator.canShare !== "function"
@@ -594,7 +651,8 @@ $("chatForm").onsubmit = (e) => { e.preventDefault(); askLibrary($("chatInput").
 $("suggestions").onclick = (e) => { if (e.target.matches("button")) askLibrary(e.target.textContent); };
 $("minutesView").onclick = () => showNoteView("minutes");
 $("discussionView").onclick = () => showNoteView("discussion");
-$("summaryLanguage").onchange = () => showNoteView("discussion");
+$("translationView").onclick = () => showNoteView("translation");
+$("translationLanguage").onchange = () => showNoteView("translation");
 $('convertPdf').onclick = async (event) => {
   try { await createCurrentPdf(event.currentTarget); }
   catch (err) { viewerStatus(`Could not create PDF: ${err.message}`, true); }

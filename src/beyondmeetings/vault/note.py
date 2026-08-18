@@ -43,12 +43,15 @@ def render_note(
     transcriber: str = "Groq Whisper",
     provider: str = "Claude",
     recorded_at: str | None = None,
+    transcript_ref: str | None = None,
 ) -> str:
     parts: list[str] = ["---\n"]
     parts.append(_yaml_list("tags", note.tags))
     parts.append(f"date: {_yaml_scalar(note.date)}\n")
     if recorded_at:
         parts.append(f"recorded_at: {_yaml_scalar(recorded_at)}\n")
+    if transcript_ref:
+        parts.append(f"transcript: {_yaml_scalar(transcript_ref)}\n")
     parts.append(_yaml_list("attendees", note.attendees))
 
     prev_link = None

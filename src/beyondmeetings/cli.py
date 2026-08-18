@@ -155,7 +155,23 @@ def main(argv: list[str] | None = None) -> int:
             transcript = source.read_text(encoding="utf-8")
 
         print("  Writing notes…", flush=True)
-        path = generate_notes(transcript, config, _provider(config))
+        transcript_ref = None
+        transcript_root = (Path(config.data_dir) / "transcripts").resolve()
+        try:
+            resolved_source = source.resolve()
+            if resolved_source.is_relative_to(transcript_root):
+                transcript_ref = str(resolved_source.relative_to(transcript_root))
+        except (OSError, RuntimeError, ValueError):
+            pass
+        note_options = (
+            {"transcript_ref": transcript_ref} if transcript_ref else {}
+        )
+        path = generate_notes(
+            transcript,
+            config,
+            _provider(config),
+            **note_options,
+        )
         print(f"Note written: {path}")
         return 0
 

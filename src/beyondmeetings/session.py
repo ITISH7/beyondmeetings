@@ -223,6 +223,7 @@ class SessionManager:
                 provider,
                 state.date,
                 recorded_at=state.started_at,
+                transcript_ref=f"{state.date}/{state.filename_base}.txt",
             )
         except Exception as exc:
             log.exception("note generation failed")

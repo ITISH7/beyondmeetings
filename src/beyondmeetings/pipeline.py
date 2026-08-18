@@ -30,6 +30,7 @@ def generate_notes(
     provider: LLMProvider,
     meeting_date: str | None = None,
     recorded_at: str | None = None,
+    transcript_ref: str | None = None,
 ) -> Path:
     vault = Path(config.notes_path)
     # The app owns its default library, so first-run note generation cannot be
@@ -73,6 +74,7 @@ def generate_notes(
             transcriber=transcriber_label(config.transcriber),
             provider=provider_label(config.provider),
             recorded_at=recorded_at,
+            transcript_ref=transcript_ref,
         ),
         encoding="utf-8",
     )
