@@ -137,7 +137,11 @@ automatically. Work down the checklist until the ring reads 100%:
 beyondmeetings open
 ```
 
-Then hit **Start**, have your meeting, hit **Stop**. Or skip the UI:
+Before **Start**, choose **My voice + laptop** to include your microphone or
+**Laptop only** for system audio such as a YouTube video. During a recording
+you can switch that setting at any time, or use **Pause** and **Resume**;
+paused time is omitted from the saved audio and transcript. Hit **Stop** when
+the meeting is finished. Or skip the UI:
 
 ```bash
 beyondmeetings start "Client kickoff"

@@ -16,7 +16,7 @@ def _mono(data, numpy):
     return numpy.asarray(data, dtype="float32").mean(axis=1)
 
 
-def record(target: Path) -> None:
+def record(target: Path, microphone_enabled: bool = True) -> None:
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     stop = target.with_suffix(".stop")
@@ -31,7 +31,7 @@ def record(target: Path) -> None:
         if speaker is None:
             raise RuntimeError("Windows has no default output device")
         loopback = soundcard.get_microphone(speaker.id, include_loopback=True)
-        microphone = soundcard.default_microphone()
+        microphone = soundcard.default_microphone() if microphone_enabled else None
 
         with wave.open(str(target), "wb") as output:
             output.setnchannels(1)
@@ -64,9 +64,12 @@ def record(target: Path) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    microphone_enabled = "--no-microphone" not in args
+    args = [arg for arg in args if arg != "--no-microphone"]
+    if len(args) != 1:
         return 2
-    record(Path(sys.argv[1]))
+    record(Path(args[0]), microphone_enabled=microphone_enabled)
     return 0
 
 

@@ -147,6 +147,7 @@ main { width: min(100%, 1080px); margin: 0 auto; }
   border-color: color-mix(in srgb, var(--bad) 38%, var(--line));
   box-shadow: 0 12px 38px color-mix(in srgb, var(--bad) 9%, transparent);
 }
+.recorderCard.paused { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 .recorderStatus { display: flex; align-items: center; gap: 20px; min-width: 0; }
 .liveIndicator {
   display: flex;
@@ -196,6 +197,26 @@ input:focus-visible, button:focus-visible, a:focus-visible {
   outline-offset: 2px;
 }
 .recorderAction { display: flex; align-items: center; gap: 18px; flex: none; }
+.captureControls { display: flex; align-items: center; gap: 8px; }
+.captureButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 680;
+  cursor: pointer;
+}
+.captureButton:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.captureButton:disabled { opacity: .55; cursor: wait; }
+.captureButton.off { background: var(--surface-soft); color: var(--muted); }
+.recordingBadge.paused { background: var(--surface-soft); color: var(--muted); }
 .timerWrap { display: flex; flex-direction: column; align-items: flex-end; }
 .timerLabel { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
 .timer { font-size: 25px; font-weight: 720; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
@@ -490,6 +511,8 @@ button.taskCard:hover { border-color: var(--accent); }
   .liveIndicator { width: 48px; height: 48px; padding: 14px; border-radius: 14px; }
   .liveIndicator span { width: 3px; }
   .recorderAction { align-items: stretch; flex-direction: column; }
+  .captureControls { display: grid; grid-template-columns: 1fr 1fr; }
+  .captureButton { width: 100%; }
   .timerWrap { align-items: flex-start; }
   .record { width: 100%; }
   .workspaceHeading, .panel { padding-left: 18px; padding-right: 18px; }

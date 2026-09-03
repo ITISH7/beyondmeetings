@@ -10,7 +10,10 @@ import pytest
 from beyondmeetings.audio.base import Recorder
 
 MEMBERS = {
-    "start": lambda self, name: None,
+    "start": lambda self, name, microphone_enabled=True: None,
+    "pause": lambda self: None,
+    "resume": lambda self: None,
+    "set_microphone_enabled": lambda self, enabled: None,
     "stop": lambda self: None,
     "status": lambda self: None,
     "roll_segment": lambda self: "",

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pytest
 
 from beyondmeetings.audio.base import Recorder, RecordingState
@@ -21,16 +23,44 @@ class FakeRecorder(Recorder):
         self.stopped = False
         self._n = 0
         self._state_error = None
+        self.paused = False
+        self.microphone_enabled = True
 
-    def start(self, name):
+    def start(self, name, microphone_enabled=True):
         self._n += 1
+        self.paused = False
+        self.microphone_enabled = microphone_enabled
         seg = self.tmp_path / f"seg{self._n:03d}.wav"
         seg.write_bytes(b"RIFF")
         self.state = RecordingState(
             name=name, filename_base=f"2026-07-30_10-00_test{self._n}",
             date="2026-07-30", pid=1, module_ids=[1], segments=[str(seg)],
             started_at="2026-07-30T10:00:00",
+            microphone_enabled=microphone_enabled,
         )
+        return self.state
+
+    def pause(self):
+        if self.state is None or self.paused:
+            raise RuntimeError("recording is not active")
+        self.paused = True
+        self.state.paused = True
+        self.state.pid = None
+        return self.state
+
+    def resume(self):
+        if self.state is None or not self.paused:
+            raise RuntimeError("recording is not paused")
+        self.paused = False
+        self.state.paused = False
+        self.state.pid = 1
+        return self.state
+
+    def set_microphone_enabled(self, enabled):
+        if self.state is None:
+            raise RuntimeError("no active recording")
+        self.microphone_enabled = enabled
+        self.state.microphone_enabled = enabled
         return self.state
 
     def stop(self):
@@ -129,6 +159,98 @@ def test_start_twice_is_refused(manager):
 def test_status_reports_elapsed_seconds(manager):
     manager.start("Test")
     assert manager.status()["elapsed_seconds"] >= 0
+
+
+def test_start_passes_the_selected_microphone_mode(manager):
+    manager.start("Video", microphone_enabled=False)
+
+    assert manager.status()["microphone_enabled"] is False
+
+
+def test_pause_freezes_elapsed_time_and_resume_continues_it(tmp_path):
+    now = [datetime(2026, 7, 30, 10, 0, 0)]
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    scaffold_vault(vault)
+    manager = SessionManager(
+        config=Config(vault_path=str(vault), data_dir=str(tmp_path / "data")),
+        recorder=FakeRecorder(tmp_path),
+        transcriber_factory=lambda c: FakeTranscriber(),
+        provider_factory=lambda c: FakeProvider(_note()),
+        clock=lambda: now[0],
+    )
+    manager.start("Video")
+    now[0] = datetime(2026, 7, 30, 10, 5, 0)
+
+    paused = manager.pause()
+    now[0] = datetime(2026, 7, 30, 10, 20, 0)
+
+    assert paused["phase"] == "paused"
+    assert manager.status()["recording"] is True
+    assert manager.status()["paused"] is True
+    assert manager.status()["elapsed_seconds"] == 300
+
+    manager.resume()
+    now[0] = datetime(2026, 7, 30, 10, 22, 0)
+    assert manager.status()["elapsed_seconds"] == 420
+
+
+def test_pause_elapsed_uses_request_time_not_backend_finalize_time(tmp_path):
+    now = [datetime(2026, 7, 30, 10, 0, 0)]
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    scaffold_vault(vault)
+
+    class SlowPauseRecorder(FakeRecorder):
+        def pause(self):
+            state = super().pause()
+            now[0] = datetime(2026, 7, 30, 10, 5, 12)
+            return state
+
+    manager = SessionManager(
+        config=Config(vault_path=str(vault), data_dir=str(tmp_path / "data")),
+        recorder=SlowPauseRecorder(tmp_path),
+        transcriber_factory=lambda c: FakeTranscriber(),
+        provider_factory=lambda c: FakeProvider(_note()),
+        clock=lambda: now[0],
+    )
+    manager.start("Video")
+    now[0] = datetime(2026, 7, 30, 10, 5, 0)
+
+    manager.pause()
+
+    assert manager.status()["elapsed_seconds"] == 300
+
+
+def test_microphone_can_change_while_recording_or_paused(manager):
+    manager.start("Video")
+    assert manager.set_microphone_enabled(False)["microphone_enabled"] is False
+
+    manager.pause()
+    status = manager.set_microphone_enabled(True)
+
+    assert status["paused"] is True
+    assert status["microphone_enabled"] is True
+
+
+def test_stop_is_allowed_while_paused(manager):
+    manager.start("Video")
+    manager.pause()
+
+    manager.run_stop()
+
+    assert manager.status()["phase"] == "done"
+
+
+def test_invalid_pause_and_resume_transitions_are_rejected(manager):
+    with pytest.raises(RuntimeError, match="no active recording"):
+        manager.pause()
+    manager.start("Video")
+    with pytest.raises(RuntimeError, match="not paused"):
+        manager.resume()
+    manager.pause()
+    with pytest.raises(RuntimeError, match="already paused"):
+        manager.pause()
 
 
 def test_stop_without_recording_is_refused(manager):

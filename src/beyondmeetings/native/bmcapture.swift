@@ -6,7 +6,7 @@
 // mixes them with ffmpeg when a segment closes.
 //
 // Usage:
-//   bmcapture record --system out.wav --mic out.wav   (records until SIGTERM)
+//   bmcapture record --system out.wav [--mic out.wav] (records until SIGTERM)
 //   bmcapture check-permissions --json
 //   bmcapture list-devices --json
 //
@@ -274,14 +274,16 @@ func fail(_ message: String) -> Never {
 // MARK: - Commands
 
 @available(macOS 13.0, *)
-func record(systemPath: String, micPath: String) async {
+func record(systemPath: String, micPath: String?) async {
     let systemWriter = AudioFileWriter(
         url: URL(fileURLWithPath: systemPath)
     )
-    let micWriter = AudioFileWriter(url: URL(fileURLWithPath: micPath))
+    let micWriter = micPath.map {
+        AudioFileWriter(url: URL(fileURLWithPath: $0))
+    }
 
     let system = SystemAudioCapture(writer: systemWriter)
-    let mic = MicrophoneCapture(writer: micWriter)
+    let mic = micWriter.map { MicrophoneCapture(writer: $0) }
 
     do {
         try await system.start()
@@ -292,13 +294,15 @@ func record(systemPath: String, micPath: String) async {
     // A missing or denied microphone must not abort the recording — the
     // system audio is the more important of the two streams, and the Python
     // side already tolerates a missing mic file.
-    do {
-        try mic.start()
-    } catch {
-        FileHandle.standardError.write(
-            "bmcapture: microphone unavailable, continuing without it: \(error)\n"
-                .data(using: .utf8)!
-        )
+    if let mic {
+        do {
+            try mic.start()
+        } catch {
+            FileHandle.standardError.write(
+                "bmcapture: microphone unavailable, continuing without it: \(error)\n"
+                    .data(using: .utf8)!
+            )
+        }
     }
 
     // SIGTERM is how the Python side ends a segment. The default disposition
@@ -315,9 +319,9 @@ func record(systemPath: String, micPath: String) async {
     stopping.wait()
 
     await system.stop()
-    mic.stop()
+    mic?.stop()
     systemWriter.close()
-    micWriter.close()
+    micWriter?.close()
 }
 
 func checkPermissions() {
@@ -344,7 +348,7 @@ func listDevices() {
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 guard let command = arguments.first else {
-    fail("usage: bmcapture record --system PATH --mic PATH | check-permissions | list-devices")
+    fail("usage: bmcapture record --system PATH [--mic PATH] | check-permissions | list-devices")
 }
 
 guard #available(macOS 13.0, *) else {
@@ -355,7 +359,12 @@ switch command {
 case "record":
     do {
         let systemPath = try value(of: "--system", in: arguments)
-        let micPath = try value(of: "--mic", in: arguments)
+        let micPath: String?
+        if arguments.contains("--mic") {
+            micPath = try value(of: "--mic", in: arguments)
+        } else {
+            micPath = nil
+        }
         let done = DispatchSemaphore(value: 0)
         Task {
             await record(systemPath: systemPath, micPath: micPath)

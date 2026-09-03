@@ -51,6 +51,7 @@ class SessionManager:
         self.on_phase_change: Callable[[str], None] | None = None
 
         self._lock = threading.Lock()
+        self._control_lock = threading.Lock()
         self._phase = "idle"
         self._detail = ""
         self._error: str | None = None
@@ -59,6 +60,8 @@ class SessionManager:
         self._segments_done = 0
         self._segments_total = 0
         self._started_at: datetime | None = None
+        self._active_started_at: datetime | None = None
+        self._captured_seconds = 0
         self._name = ""
         self._rollover_error: str | None = None
         self._stop_thread: threading.Thread | None = None
@@ -82,14 +85,20 @@ class SessionManager:
 
     def status(self) -> dict:
         with self._lock:
-            recording = self.recorder.status() is not None
-            elapsed = 0
-            if recording and self._started_at:
-                elapsed = int((self.clock() - self._started_at).total_seconds())
+            recorder_state = self.recorder.status()
+            recording = recorder_state is not None
+            paused = bool(recorder_state and recorder_state.paused)
+            elapsed = self._captured_seconds
+            if recording and not paused and self._active_started_at:
+                elapsed += int((self.clock() - self._active_started_at).total_seconds())
             return {
                 "phase": self._phase,
                 "detail": self._detail,
                 "recording": recording,
+                "paused": paused,
+                "microphone_enabled": (
+                    recorder_state.microphone_enabled if recorder_state else True
+                ),
                 "name": self._name,
                 "elapsed_seconds": elapsed,
                 "segments_done": self._segments_done,
@@ -105,7 +114,7 @@ class SessionManager:
 
     # ---------- start ----------
 
-    def start(self, name: str = "") -> dict:
+    def start(self, name: str = "", microphone_enabled: bool = True) -> dict:
         """Guards, state mutation and recorder.start() are all one atomic step.
 
         FastAPI dispatches sync endpoints to a threadpool, so two tabs or a
@@ -113,37 +122,91 @@ class SessionManager:
         lock let every caller through, each loading its own PipeWire modules
         that nothing could later tear down.
         """
-        with self._lock:
-            if self.recorder.status() is not None:
-                raise RuntimeError("already recording")
-            if self._phase in BUSY_PHASES:
-                raise RuntimeError(f"still {self._phase} the previous meeting")
+        with self._control_lock:
+            with self._lock:
+                if self.recorder.status() is not None:
+                    raise RuntimeError("already recording")
+                if self._phase in BUSY_PHASES:
+                    raise RuntimeError(f"still {self._phase} the previous meeting")
 
-            name = (name or "").strip() or placeholder_name(self.clock())
-            self._error = None
-            self._note_path = None
-            self._transcript_path = None
-            self._segments_done = 0
-            self._segments_total = 0
-            self._name = name
-            self._started_at = self.clock()
-            self._rollover_error = None
+                name = (name or "").strip() or placeholder_name(self.clock())
+                self._error = None
+                self._note_path = None
+                self._transcript_path = None
+                self._segments_done = 0
+                self._segments_total = 0
+                self._name = name
+                self._started_at = self.clock()
+                self._active_started_at = self._started_at
+                self._captured_seconds = 0
+                self._rollover_error = None
 
-            self.recorder.start(name)
-            self._rollover.mark_segment_start(self._started_at)
+                self.recorder.start(name, microphone_enabled=microphone_enabled)
+                self._rollover.mark_segment_start(self._started_at)
 
         self._set_phase("recording")
         self._start_ticker()
         return self.status()
 
+    def pause(self) -> dict:
+        with self._control_lock:
+            state = self.recorder.status()
+            if state is None:
+                raise RuntimeError("no active recording")
+            if state.paused:
+                raise RuntimeError("recording is already paused")
+            if self._phase in BUSY_PHASES:
+                raise RuntimeError(f"recording is {self._phase}")
+            pause_requested_at = self.clock()
+            self.recorder.pause()
+            with self._lock:
+                if self._active_started_at:
+                    self._captured_seconds += int(
+                        (pause_requested_at - self._active_started_at).total_seconds()
+                    )
+                self._active_started_at = None
+            self._set_phase("paused", "Capture paused. Paused time will be excluded.")
+        return self.status()
+
+    def resume(self) -> dict:
+        with self._control_lock:
+            state = self.recorder.status()
+            if state is None:
+                raise RuntimeError("no active recording")
+            if not state.paused:
+                raise RuntimeError("recording is not paused")
+            self.recorder.resume()
+            now = self.clock()
+            with self._lock:
+                self._active_started_at = now
+            self._rollover.mark_segment_start(now)
+            self._set_phase("recording")
+        return self.status()
+
+    def set_microphone_enabled(self, enabled: bool) -> dict:
+        with self._control_lock:
+            state = self.recorder.status()
+            if state is None:
+                raise RuntimeError("no active recording")
+            if self._phase in BUSY_PHASES:
+                raise RuntimeError(f"recording is {self._phase}")
+            was_paused = state.paused
+            self.recorder.set_microphone_enabled(enabled)
+            if not was_paused:
+                self._rollover.mark_segment_start(self.clock())
+        return self.status()
+
     def reset(self) -> dict:
         """Recover from a wedged or corrupt recording state."""
-        with self._lock:
-            self._ticker_stop.set()
-            if hasattr(self.recorder, "reset"):
-                self.recorder.reset()
-            self._error = None
-            self._rollover_error = None
+        with self._control_lock:
+            with self._lock:
+                self._ticker_stop.set()
+                if hasattr(self.recorder, "reset"):
+                    self.recorder.reset()
+                self._error = None
+                self._rollover_error = None
+                self._active_started_at = None
+                self._captured_seconds = 0
         self._set_phase("idle", "Recording state cleared.")
         return self.status()
 
@@ -180,31 +243,36 @@ class SessionManager:
     # ---------- stop ----------
 
     def stop(self) -> dict:
-        if self.recorder.status() is None:
-            raise RuntimeError("no active recording")
-        self._stop_thread = threading.Thread(target=self.run_stop, daemon=True)
-        self._stop_thread.start()
+        with self._control_lock:
+            if self.recorder.status() is None:
+                raise RuntimeError("no active recording")
+            if self._phase in BUSY_PHASES:
+                raise RuntimeError(f"recording is already {self._phase}")
+            self._set_phase("stopping")
+            self._stop_thread = threading.Thread(target=self.run_stop, daemon=True)
+            self._stop_thread.start()
         return self.status()
 
     def run_stop(self) -> dict:
-        if self.recorder.status() is None:
-            raise RuntimeError("no active recording")
+        with self._control_lock:
+            if self.recorder.status() is None:
+                raise RuntimeError("no active recording")
 
-        # Event.set() does not wait. A mid-flight roll_segment() would finish
-        # after teardown, re-create the state file the stop just deleted, and
-        # leave the app permanently unable to start or stop.
-        self._ticker_stop.set()
-        ticker = self._ticker
-        if ticker is not None and ticker.is_alive():
-            ticker.join(timeout=TICKER_JOIN_TIMEOUT)
+            # Event.set() does not wait. A mid-flight roll_segment() would finish
+            # after teardown, re-create the state file the stop just deleted, and
+            # leave the app permanently unable to start or stop.
+            self._ticker_stop.set()
+            ticker = self._ticker
+            if ticker is not None and ticker.is_alive():
+                ticker.join(timeout=TICKER_JOIN_TIMEOUT)
 
-        self._set_phase("stopping")
-        try:
-            state = self.recorder.stop()
-        except Exception as exc:
-            log.exception("recording finalization failed")
-            self._fail(f"Recording failed: {exc}")
-            return self.status()
+            self._set_phase("stopping")
+            try:
+                state = self.recorder.stop()
+            except Exception as exc:
+                log.exception("recording finalization failed")
+                self._fail(f"Recording failed: {exc}")
+                return self.status()
 
         try:
             transcript = self._transcribe(state)

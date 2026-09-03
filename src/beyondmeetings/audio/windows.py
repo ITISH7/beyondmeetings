@@ -52,14 +52,16 @@ class WindowsRecorder(Recorder):
             target.with_suffix(".error"),
         )
 
-    def _spawn(self, target: Path) -> int:
+    def _spawn(self, target: Path, microphone_enabled: bool = True) -> int:
         stop, done, error = self._signal_paths(target)
         stop.unlink(missing_ok=True)
         done.unlink(missing_ok=True)
         error.unlink(missing_ok=True)
-        return self.runner.spawn([
-            sys.executable, "-m", "beyondmeetings.audio.windows_worker", str(target)
-        ])
+        command = [sys.executable, "-m", "beyondmeetings.audio.windows_worker"]
+        if not microphone_enabled:
+            command.append("--no-microphone")
+        command.append(str(target))
+        return self.runner.spawn(command)
 
     def _finish(self, target: Path, pid: int, timeout: float = 12.0) -> None:
         stop, done, error = self._signal_paths(target)
@@ -77,11 +79,40 @@ class WindowsRecorder(Recorder):
             error.unlink(missing_ok=True)
             raise RuntimeError(f"Windows audio capture failed: {detail}")
 
-    def start(self, name: str) -> RecordingState:
+    def _check_started(self, target: Path, pid: int) -> None:
+        _stop, done, error = self._signal_paths(target)
+        if error.exists():
+            detail = error.read_text(encoding="utf-8", errors="replace")
+            error.unlink(missing_ok=True)
+            done.unlink(missing_ok=True)
+            self.runner.kill(pid)
+            raise RuntimeError(f"Windows audio capture failed: {detail}")
+
+    def _resume_capture(self, state: RecordingState) -> None:
+        target = self._segment_path(state, len(state.segments))
+        pid = None
+        try:
+            pid = self._spawn(target, state.microphone_enabled)
+            self._check_started(target, pid)
+        except Exception:
+            if pid is not None:
+                self.runner.kill(pid)
+            target.unlink(missing_ok=True)
+            state.pid = None
+            state.paused = True
+            save_state(state, self.state_path)
+            raise
+        state.segments.append(str(target))
+        state.pid = pid
+        state.paused = False
+        save_state(state, self.state_path)
+
+    def start(self, name: str, microphone_enabled: bool = True) -> RecordingState:
         with self._lock:
             stale = self.status()
             if stale:
-                self._finish(Path(stale.segments[-1]), stale.pid)
+                if stale.pid is not None:
+                    self._finish(Path(stale.segments[-1]), stale.pid)
                 clear_state(self.state_path)
             now = datetime.now()
             day = now.strftime("%Y-%m-%d")
@@ -89,10 +120,17 @@ class WindowsRecorder(Recorder):
                 name=name,
                 filename_base=build_filename_base(name, day, now.strftime("%H-%M")),
                 date=day, pid=0, segments=[], started_at=now.isoformat(timespec="seconds"),
+                microphone_enabled=microphone_enabled,
             )
             target = self._segment_path(state, 0)
             state.segments.append(str(target))
-            state.pid = self._spawn(target)
+            try:
+                state.pid = self._spawn(target, state.microphone_enabled)
+                self._check_started(target, state.pid)
+            except Exception:
+                clear_state(self.state_path)
+                target.unlink(missing_ok=True)
+                raise
             save_state(state, self.state_path)
             return state
 
@@ -101,20 +139,63 @@ class WindowsRecorder(Recorder):
             state = self.status()
             if not state:
                 raise RuntimeError("no active recording")
+            if state.paused or state.pid is None:
+                raise RuntimeError("recording is paused")
             finished = Path(state.segments[-1])
             self._finish(finished, state.pid)
-            target = self._segment_path(state, len(state.segments))
-            state.segments.append(str(target))
-            state.pid = self._spawn(target)
+            state.pid = None
+            state.paused = True
             save_state(state, self.state_path)
+            self._resume_capture(state)
             return str(finished)
+
+    def pause(self) -> RecordingState:
+        with self._lock:
+            state = self.status()
+            if not state:
+                raise RuntimeError("no active recording")
+            if state.paused or state.pid is None:
+                raise RuntimeError("recording is already paused")
+            self._finish(Path(state.segments[-1]), state.pid)
+            state.pid = None
+            state.paused = True
+            save_state(state, self.state_path)
+            return state
+
+    def resume(self) -> RecordingState:
+        with self._lock:
+            state = self.status()
+            if not state:
+                raise RuntimeError("no active recording")
+            if not state.paused:
+                raise RuntimeError("recording is not paused")
+            self._resume_capture(state)
+            return state
+
+    def set_microphone_enabled(self, enabled: bool) -> RecordingState:
+        with self._lock:
+            state = self.status()
+            if not state:
+                raise RuntimeError("no active recording")
+            if state.microphone_enabled == enabled:
+                return state
+            was_paused = state.paused
+            if not was_paused:
+                self.pause()
+                state = self.status()
+            state.microphone_enabled = enabled
+            save_state(state, self.state_path)
+            if not was_paused:
+                return self.resume()
+            return state
 
     def stop(self) -> RecordingState:
         with self._lock:
             state = self.status()
             if not state:
                 raise RuntimeError("no active recording")
-            self._finish(Path(state.segments[-1]), state.pid)
+            if state.pid is not None:
+                self._finish(Path(state.segments[-1]), state.pid)
             clear_state(self.state_path)
             return state
 
@@ -139,9 +220,10 @@ class WindowsRecorder(Recorder):
             except ValueError:
                 stale = None
             if stale:
-                try:
-                    self._finish(Path(stale.segments[-1]), stale.pid)
-                except RuntimeError:
-                    pass
+                if stale.pid is not None:
+                    try:
+                        self._finish(Path(stale.segments[-1]), stale.pid)
+                    except RuntimeError:
+                        pass
             clear_state(self.state_path)
             self._state_error = None

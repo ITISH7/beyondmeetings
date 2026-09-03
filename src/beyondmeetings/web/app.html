@@ -43,6 +43,17 @@
           <span class="timerLabel">Elapsed</span>
           <span class="timer" id="timer">00:00</span>
         </div>
+        <div class="captureControls">
+          <button id="microphone" class="captureButton" type="button"
+                  aria-pressed="true" title="Include your microphone">
+            <span aria-hidden="true">●</span>
+            <span id="microphoneLabel">My voice + laptop</span>
+          </button>
+          <button id="pause" class="captureButton" type="button" hidden>
+            <span id="pauseIcon" aria-hidden="true">Ⅱ</span>
+            <span id="pauseLabel">Pause</span>
+          </button>
+        </div>
         <button id="record" class="record" type="button">
           <span class="recordIcon" aria-hidden="true"></span>
           <span id="recordLabel">Start recording</span>

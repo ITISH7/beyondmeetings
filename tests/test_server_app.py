@@ -15,6 +15,7 @@ from beyondmeetings.vault.scaffold import scaffold_vault
 
 IDLE = {
     "phase": "idle", "detail": "", "recording": False, "name": "",
+    "paused": False, "microphone_enabled": True,
     "elapsed_seconds": 0, "segments_done": 0, "segments_total": 0,
     "note_path": None, "transcript_path": None, "error": None,
 }
@@ -31,12 +32,31 @@ class FakeSession:
     def __init__(self):
         self.started = None
         self.stopped = False
+        self.paused = False
+        self.microphone_enabled = True
         self.state = dict(IDLE)
 
-    def start(self, name=""):
-        self.started = name
+    def start(self, name="", microphone_enabled=True):
+        self.started = (name, microphone_enabled)
+        self.microphone_enabled = microphone_enabled
         self.state = {**self.state, "phase": "recording", "recording": True,
-                      "name": name or "recording-10-00"}
+                      "name": name or "recording-10-00", "paused": False,
+                      "microphone_enabled": microphone_enabled}
+        return self.state
+
+    def pause(self):
+        self.paused = True
+        self.state = {**self.state, "phase": "paused", "paused": True}
+        return self.state
+
+    def resume(self):
+        self.paused = False
+        self.state = {**self.state, "phase": "recording", "paused": False}
+        return self.state
+
+    def set_microphone_enabled(self, enabled):
+        self.microphone_enabled = enabled
+        self.state = {**self.state, "microphone_enabled": enabled}
         return self.state
 
     def stop(self):
@@ -73,6 +93,8 @@ def test_root_serves_the_app_page(app_and_session):
     assert "app.css" in response.text
     assert "Ask your notes" in response.text
     assert 'id="recordingBadge"' in response.text
+    assert 'id="pause"' in response.text
+    assert 'id="microphone"' in response.text
 
 
 def test_app_page_includes_pdf_and_share_actions(app_and_session):
@@ -129,14 +151,52 @@ def test_recording_status_is_exposed(app_and_session):
 def test_start_passes_the_name_through(app_and_session):
     client, session, _ = app_and_session
     body = client.post("/api/recording/start", json={"name": "Kickoff"}).json()
-    assert session.started == "Kickoff"
+    assert session.started == ("Kickoff", True)
     assert body["recording"] is True
 
 
 def test_start_without_a_name_is_allowed(app_and_session):
     client, session, _ = app_and_session
     assert client.post("/api/recording/start", json={}).status_code == 200
-    assert session.started == ""
+    assert session.started == ("", True)
+
+
+def test_start_passes_laptop_only_selection(app_and_session):
+    client, session, _ = app_and_session
+
+    body = client.post(
+        "/api/recording/start",
+        json={"name": "Video", "microphone_enabled": False},
+    ).json()
+
+    assert session.started == ("Video", False)
+    assert body["microphone_enabled"] is False
+
+
+def test_pause_resume_and_microphone_endpoints_dispatch(app_and_session):
+    client, session, _ = app_and_session
+    client.post("/api/recording/start", json={"name": "Video"})
+
+    assert client.post("/api/recording/pause", json={}).json()["paused"] is True
+    assert client.post("/api/recording/microphone", json={"enabled": False}).json()[
+        "microphone_enabled"
+    ] is False
+    assert client.post("/api/recording/resume", json={}).json()["paused"] is False
+    assert session.microphone_enabled is False
+
+
+def test_recording_control_conflicts_return_409(app_and_session, monkeypatch):
+    client, session, _ = app_and_session
+
+    def boom():
+        raise RuntimeError("recording is not paused")
+
+    monkeypatch.setattr(session, "resume", boom)
+
+    response = client.post("/api/recording/resume", json={})
+
+    assert response.status_code == 409
+    assert "not paused" in response.json()["detail"]
 
 
 def test_stop_dispatches_to_the_session(app_and_session):
@@ -149,7 +209,7 @@ def test_stop_dispatches_to_the_session(app_and_session):
 def test_start_while_recording_returns_409(app_and_session, monkeypatch):
     client, session, _ = app_and_session
 
-    def boom(name=""):
+    def boom(name="", microphone_enabled=True):
         raise RuntimeError("already recording")
 
     monkeypatch.setattr(session, "start", boom)

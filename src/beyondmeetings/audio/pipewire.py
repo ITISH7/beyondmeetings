@@ -109,18 +109,21 @@ class PipeWireRecorder(Recorder):
                 return
             if not self._capture_is_running(pid):
                 raise RuntimeError(
-                    "audio capture exited before writing a WAV; check server.log"
+                "audio capture exited before writing a WAV; check server.log"
                 )
             time.sleep(0.05)
         raise RuntimeError("audio capture did not create a WAV within 3 seconds")
 
-    def _stop_capture(self, target: Path, pid: int) -> None:
+    def _terminate_capture_process(self, pid: int) -> None:
         self.runner.run(["kill", str(pid)])
         deadline = time.monotonic() + CAPTURE_STOP_TIMEOUT
         while self._capture_is_running(pid) and time.monotonic() < deadline:
             time.sleep(0.05)
         if self._capture_is_running(pid):
             self.runner.run(["kill", "-KILL", str(pid)])
+
+    def _stop_capture(self, target: Path, pid: int) -> None:
+        self._terminate_capture_process(pid)
         if not target.is_file() or target.stat().st_size < MIN_WAV_BYTES:
             raise RuntimeError(f"audio capture produced no usable WAV at {target}")
 
@@ -128,14 +131,48 @@ class PipeWireRecorder(Recorder):
         for module_id in reversed(module_ids):
             self.runner.run(["pactl", "unload-module", str(module_id)])
 
+    def _default_source(self) -> str | None:
+        info = self.runner.run(["pactl", "info"])
+        match = re.search(r"^Default Source: (.+)$", info, re.MULTILINE)
+        return match.group(1).strip() if match else None
+
+    def _load_microphone(self) -> int | None:
+        source = self._default_source()
+        if not source:
+            return None
+        return int(self.runner.run(
+            ["pactl", "load-module", "module-loopback",
+             f"source={source}", f"sink={MIX_SINK}"]
+        ))
+
+    def _resume_capture(self, state: RecordingState) -> None:
+        target = self._segment_path(state, len(state.segments))
+        pid = None
+        try:
+            pid = self._spawn_capture(target)
+            self._wait_for_capture(target, pid)
+        except Exception:
+            if pid is not None:
+                self._terminate_capture_process(pid)
+            target.unlink(missing_ok=True)
+            state.pid = None
+            state.paused = True
+            save_state(state, self.state_path)
+            raise
+        state.segments.append(str(target))
+        state.pid = pid
+        state.paused = False
+        save_state(state, self.state_path)
+
     # ---------- Recorder ----------
 
-    def start(self, name: str) -> RecordingState:
+    def start(self, name: str, microphone_enabled: bool = True) -> RecordingState:
         with self._lock:
             stale = load_state(self.state_path)
             if stale:
                 try:
-                    self._stop_capture(Path(stale.segments[-1]), stale.pid)
+                    if stale.pid is not None:
+                        self._stop_capture(Path(stale.segments[-1]), stale.pid)
                 finally:
                     self._teardown_modules(stale.module_ids)
                     clear_state(self.state_path)
@@ -165,18 +202,16 @@ class PipeWireRecorder(Recorder):
                      f"source={source}", f"sink={MIX_SINK}"]
                 )))
 
-            info = self.runner.run(["pactl", "info"])
-            match = re.search(r"^Default Source: (.+)$", info, re.MULTILINE)
-            if match:
-                module_ids.append(int(self.runner.run(
-                    ["pactl", "load-module", "module-loopback",
-                     f"source={match.group(1).strip()}", f"sink={MIX_SINK}"]
-                )))
+            microphone_module_id = self._load_microphone() if microphone_enabled else None
+            if microphone_module_id is not None:
+                module_ids.append(microphone_module_id)
 
             state = RecordingState(
                 name=name, filename_base=base, date=day, pid=0,
                 module_ids=module_ids, segments=[],
                 started_at=now.isoformat(timespec="seconds"),
+                microphone_enabled=microphone_enabled,
+                microphone_module_id=microphone_module_id,
             )
             first = self._segment_path(state, 0)
             state.segments.append(str(first))
@@ -199,17 +234,72 @@ class PipeWireRecorder(Recorder):
             state = self.status()
             if not state:
                 raise RuntimeError("no active recording")
+            if state.paused or state.pid is None:
+                raise RuntimeError("recording is paused")
 
             finished = Path(state.segments[-1])
             self._stop_capture(finished, state.pid)
-
-            nxt = self._segment_path(state, len(state.segments))
-            next_pid = self._spawn_capture(nxt)
-            self._wait_for_capture(nxt, next_pid)
-            state.segments.append(str(nxt))
-            state.pid = next_pid
+            state.pid = None
+            state.paused = True
             save_state(state, self.state_path)
+            self._resume_capture(state)
             return str(finished)
+
+    def pause(self) -> RecordingState:
+        with self._lock:
+            state = self.status()
+            if not state:
+                raise RuntimeError("no active recording")
+            if state.paused or state.pid is None:
+                raise RuntimeError("recording is already paused")
+            self._stop_capture(Path(state.segments[-1]), state.pid)
+            state.pid = None
+            state.paused = True
+            save_state(state, self.state_path)
+            return state
+
+    def resume(self) -> RecordingState:
+        with self._lock:
+            state = self.status()
+            if not state:
+                raise RuntimeError("no active recording")
+            if not state.paused:
+                raise RuntimeError("recording is not paused")
+            self._resume_capture(state)
+            return state
+
+    def set_microphone_enabled(self, enabled: bool) -> RecordingState:
+        with self._lock:
+            state = self.status()
+            if not state:
+                raise RuntimeError("no active recording")
+            if state.microphone_enabled == enabled:
+                return state
+
+            was_paused = state.paused
+            if not was_paused:
+                self._stop_capture(Path(state.segments[-1]), state.pid)
+                state.pid = None
+                state.paused = True
+                save_state(state, self.state_path)
+
+            if state.microphone_module_id is not None:
+                self.runner.run([
+                    "pactl", "unload-module", str(state.microphone_module_id)
+                ])
+                if state.microphone_module_id in state.module_ids:
+                    state.module_ids.remove(state.microphone_module_id)
+                state.microphone_module_id = None
+            if enabled:
+                state.microphone_module_id = self._load_microphone()
+                if state.microphone_module_id is not None:
+                    state.module_ids.append(state.microphone_module_id)
+            state.microphone_enabled = enabled
+            save_state(state, self.state_path)
+
+            if not was_paused:
+                self._resume_capture(state)
+            return state
 
     def stop(self) -> RecordingState:
         with self._lock:
@@ -218,7 +308,8 @@ class PipeWireRecorder(Recorder):
                 raise RuntimeError("no active recording")
 
             try:
-                self._stop_capture(Path(state.segments[-1]), state.pid)
+                if state.pid is not None:
+                    self._stop_capture(Path(state.segments[-1]), state.pid)
             finally:
                 self._teardown_modules(state.module_ids)
                 clear_state(self.state_path)
@@ -253,6 +344,7 @@ class PipeWireRecorder(Recorder):
                 stale = None
             if stale:
                 self._teardown_modules(stale.module_ids)
-                self.runner.run(["kill", str(stale.pid)])
+                if stale.pid is not None:
+                    self.runner.run(["kill", str(stale.pid)])
             clear_state(self.state_path)
             self._state_error = None

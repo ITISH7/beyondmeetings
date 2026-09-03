@@ -84,6 +84,11 @@ class SettingsPatch(BaseModel, extra="forbid"):
 
 class StartRequest(BaseModel, extra="forbid"):
     name: str = ""
+    microphone_enabled: bool = True
+
+
+class MicrophoneRequest(BaseModel, extra="forbid"):
+    enabled: bool
 
 
 class RegenerateRequest(BaseModel, extra="forbid"):
@@ -203,7 +208,30 @@ def create_app(
     @app.post("/api/recording/start")
     def recording_start(request: StartRequest):
         try:
-            return current_session().start(request.name)
+            return current_session().start(
+                request.name, microphone_enabled=request.microphone_enabled
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/recording/pause")
+    def recording_pause():
+        try:
+            return current_session().pause()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/recording/resume")
+    def recording_resume():
+        try:
+            return current_session().resume()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/recording/microphone")
+    def recording_microphone(request: MicrophoneRequest):
+        try:
+            return current_session().set_microphone_enabled(request.enabled)
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

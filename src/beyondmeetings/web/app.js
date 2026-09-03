@@ -3,6 +3,7 @@ let meetings = [];
 let tasks = [];
 let polling = null;
 let lastCompletedPath = null;
+let recordingWasActive = false;
 let currentNotePath = null;
 let currentNoteContent = "";
 let currentNoteView = "minutes";
@@ -67,6 +68,7 @@ function meetingTime(recordedAt) {
 const LABELS = {
   idle: "Ready to record",
   recording: "Recording in progress",
+  paused: "Recording paused",
   stopping: "Securing your recording…",
   transcribing: "Transcribing the meeting…",
   analysing: "Writing structured notes…",
@@ -76,6 +78,7 @@ const LABELS = {
 const DETAILS = {
   idle: "Name the meeting, then start when everyone is ready.",
   recording: "Audio is being captured locally. Keep this app open.",
+  paused: "Capture is paused. This time will not appear in the transcript.",
   stopping: "Finalizing the audio file before transcription.",
   transcribing: "Turning the recording into a searchable transcript.",
   analysing: "Creating the summary, decisions and action items.",
@@ -83,15 +86,30 @@ const DETAILS = {
 };
 const BUSY = ["stopping", "transcribing", "analysing"];
 
+function setMicrophoneButton(enabled) {
+  const button = $("microphone");
+  button.setAttribute("aria-pressed", String(enabled));
+  button.classList.toggle("off", !enabled);
+  button.title = enabled ? "Mute your microphone" : "Include your microphone";
+  $("microphoneLabel").textContent = enabled
+    ? "My voice + laptop"
+    : "Laptop only";
+}
+
 function renderStatus(s) {
   const busy = BUSY.includes(s.phase);
   const btn = $("record");
   const recording = Boolean(s.recording);
+  const paused = recording && Boolean(s.paused);
+  if (!recording && recordingWasActive) setMicrophoneButton(true);
+  recordingWasActive = recording;
 
   $("state").textContent = recording && s.name
     ? s.name
     : LABELS[s.phase] || s.phase;
-  $("statusEyebrow").textContent = recording ? "Recording now" : "Meeting recorder";
+  $("statusEyebrow").textContent = paused
+    ? "Capture paused"
+    : recording ? "Recording now" : "Meeting recorder";
   $("detail").textContent = s.phase === "failed"
     ? "See the recovery details below."
     : s.detail || DETAILS[s.phase] || "";
@@ -102,12 +120,23 @@ function renderStatus(s) {
   $("recordLabel").textContent = busy ? LABELS[s.phase] : recording ? "Stop recording" : "Start recording";
   btn.classList.toggle("stop", recording);
   btn.classList.toggle("busy", busy);
+  $("pause").hidden = !recording || busy;
+  $("pause").disabled = busy;
+  $("pauseLabel").textContent = paused ? "Resume" : "Pause";
+  $("pauseIcon").textContent = paused ? "▶" : "Ⅱ";
+  $("microphone").disabled = busy;
+  if (recording) setMicrophoneButton(s.microphone_enabled !== false);
   $("name").hidden = recording || busy;
-  $("liveIndicator").classList.toggle("active", recording);
+  $("liveIndicator").classList.toggle("active", recording && !paused);
   $("recorderCard")?.classList?.toggle("recording", recording);
+  $("recorderCard")?.classList?.toggle("paused", paused);
 
-  $("recordingBadge").classList.toggle("active", recording);
-  $("recordingBadgeText").textContent = recording ? `Recording · ${clock(s.elapsed_seconds)}` : busy ? LABELS[s.phase] : "Not recording";
+  $("recordingBadge").classList.toggle("active", recording && !paused);
+  $("recordingBadge").classList.toggle("paused", paused);
+  $("recordingBadgeText").textContent = paused
+    ? `Paused · ${clock(s.elapsed_seconds)}`
+    : recording ? `Recording · ${clock(s.elapsed_seconds)}`
+      : busy ? LABELS[s.phase] : "Not recording";
 
   const wedged = Boolean(s.state_error);
   const failed = s.phase === "failed";
@@ -641,10 +670,47 @@ $("record").onclick = async () => {
     const current = await api("/api/recording");
     renderStatus(current.recording
       ? await api("/api/recording/stop", {})
-      : await api("/api/recording/start", { name: $("name").value }));
+      : await api("/api/recording/start", {
+          name: $("name").value,
+          microphone_enabled: $("microphone").getAttribute("aria-pressed") === "true",
+        }));
   } catch (err) {
     btn.disabled = false;
     window.alert(err.message);
+  }
+};
+
+$("pause").onclick = async () => {
+  const btn = $("pause");
+  btn.disabled = true;
+  try {
+    const current = await api("/api/recording");
+    renderStatus(await api(
+      current.paused ? "/api/recording/resume" : "/api/recording/pause",
+      {},
+    ));
+  } catch (err) {
+    window.alert(`Could not change pause state: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+$("microphone").onclick = async () => {
+  const btn = $("microphone");
+  const enabled = btn.getAttribute("aria-pressed") !== "true";
+  btn.disabled = true;
+  try {
+    const current = await api("/api/recording");
+    if (current.recording) {
+      renderStatus(await api("/api/recording/microphone", { enabled }));
+    } else {
+      setMicrophoneButton(enabled);
+    }
+  } catch (err) {
+    window.alert(`Could not change microphone mode: ${err.message}`);
+  } finally {
+    btn.disabled = false;
   }
 };
 

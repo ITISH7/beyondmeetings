@@ -21,10 +21,13 @@ class RecordingState(BaseModel):
     name: str
     filename_base: str
     date: str
-    pid: int
+    pid: int | None
     module_ids: list[int] = Field(default_factory=list)
     segments: list[str] = Field(default_factory=list)
     started_at: str
+    paused: bool = False
+    microphone_enabled: bool = True
+    microphone_module_id: int | None = None
 
 
 def save_state(state: RecordingState, path: Path) -> None:
@@ -61,7 +64,19 @@ class Recorder(ABC):
     """
 
     @abstractmethod
-    def start(self, name: str) -> RecordingState:
+    def start(self, name: str, microphone_enabled: bool = True) -> RecordingState:
+        ...
+
+    @abstractmethod
+    def pause(self) -> RecordingState:
+        ...
+
+    @abstractmethod
+    def resume(self) -> RecordingState:
+        ...
+
+    @abstractmethod
+    def set_microphone_enabled(self, enabled: bool) -> RecordingState:
         ...
 
     @abstractmethod
