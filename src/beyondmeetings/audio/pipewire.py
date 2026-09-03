@@ -8,9 +8,12 @@ hourly audio-seconds cap.
 """
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -24,16 +27,34 @@ from .base import (
 )
 
 MIX_SINK = "meeting_mix"
+MIN_WAV_BYTES = 44
+CAPTURE_START_TIMEOUT = 3.0
+CAPTURE_STOP_TIMEOUT = 5.0
 
 
 class SubprocessRunner:
+    def __init__(self):
+        self._children: dict[int, subprocess.Popen] = {}
+
     def run(self, args: list[str]) -> str:
         return subprocess.run(
             args, capture_output=True, text=True, check=False
         ).stdout.strip()
 
     def spawn(self, args: list[str]) -> int:
-        return subprocess.Popen(args).pid
+        process = subprocess.Popen(args)
+        self._children[process.pid] = process
+        return process.pid
+
+    def is_running(self, pid: int) -> bool:
+        child = self._children.get(pid)
+        if child is not None:
+            return child.poll() is None
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
 
 
 class PipeWireRecorder(Recorder):
@@ -55,22 +76,106 @@ class PipeWireRecorder(Recorder):
         return folder / f"{state.filename_base}_seg{index:03d}.wav"
 
     def _spawn_capture(self, target: Path) -> int:
-        return self.runner.spawn(
-            ["pw-record", "--target", f"{MIX_SINK}.monitor", str(target)]
-        )
+        if shutil.which("parec"):
+            command = [
+                "parec",
+                f"--device={MIX_SINK}.monitor",
+                "--file-format=wav",
+                str(target),
+            ]
+        elif shutil.which("pw-record"):
+            # Native PipeWire installations may not ship PulseAudio's parec.
+            # The monitor created through pipewire-pulse is exposed as the
+            # same stable node name to pw-record.
+            command = [
+                "pw-record",
+                "--target",
+                f"{MIX_SINK}.monitor",
+                str(target),
+            ]
+        else:
+            raise RuntimeError("neither parec nor pw-record is installed")
+        return self.runner.spawn(command)
+
+    def _capture_is_running(self, pid: int) -> bool:
+        check = getattr(self.runner, "is_running", None)
+        return check(pid) if check else True
+
+    def _wait_for_capture(self, target: Path, pid: int) -> None:
+        """Fail Start immediately if the recorder exits without a WAV."""
+        deadline = time.monotonic() + CAPTURE_START_TIMEOUT
+        while time.monotonic() < deadline:
+            if target.is_file() and target.stat().st_size >= MIN_WAV_BYTES:
+                return
+            if not self._capture_is_running(pid):
+                raise RuntimeError(
+                "audio capture exited before writing a WAV; check server.log"
+                )
+            time.sleep(0.05)
+        raise RuntimeError("audio capture did not create a WAV within 3 seconds")
+
+    def _terminate_capture_process(self, pid: int) -> None:
+        self.runner.run(["kill", str(pid)])
+        deadline = time.monotonic() + CAPTURE_STOP_TIMEOUT
+        while self._capture_is_running(pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if self._capture_is_running(pid):
+            self.runner.run(["kill", "-KILL", str(pid)])
+
+    def _stop_capture(self, target: Path, pid: int) -> None:
+        self._terminate_capture_process(pid)
+        if not target.is_file() or target.stat().st_size < MIN_WAV_BYTES:
+            raise RuntimeError(f"audio capture produced no usable WAV at {target}")
 
     def _teardown_modules(self, module_ids: list[int]) -> None:
         for module_id in reversed(module_ids):
             self.runner.run(["pactl", "unload-module", str(module_id)])
 
+    def _default_source(self) -> str | None:
+        info = self.runner.run(["pactl", "info"])
+        match = re.search(r"^Default Source: (.+)$", info, re.MULTILINE)
+        return match.group(1).strip() if match else None
+
+    def _load_microphone(self) -> int | None:
+        source = self._default_source()
+        if not source:
+            return None
+        return int(self.runner.run(
+            ["pactl", "load-module", "module-loopback",
+             f"source={source}", f"sink={MIX_SINK}"]
+        ))
+
+    def _resume_capture(self, state: RecordingState) -> None:
+        target = self._segment_path(state, len(state.segments))
+        pid = None
+        try:
+            pid = self._spawn_capture(target)
+            self._wait_for_capture(target, pid)
+        except Exception:
+            if pid is not None:
+                self._terminate_capture_process(pid)
+            target.unlink(missing_ok=True)
+            state.pid = None
+            state.paused = True
+            save_state(state, self.state_path)
+            raise
+        state.segments.append(str(target))
+        state.pid = pid
+        state.paused = False
+        save_state(state, self.state_path)
+
     # ---------- Recorder ----------
 
-    def start(self, name: str) -> RecordingState:
+    def start(self, name: str, microphone_enabled: bool = True) -> RecordingState:
         with self._lock:
             stale = load_state(self.state_path)
             if stale:
-                self._teardown_modules(stale.module_ids)
-                clear_state(self.state_path)
+                try:
+                    if stale.pid is not None:
+                        self._stop_capture(Path(stale.segments[-1]), stale.pid)
+                finally:
+                    self._teardown_modules(stale.module_ids)
+                    clear_state(self.state_path)
 
             now = datetime.now()
             day = now.strftime("%Y-%m-%d")
@@ -97,22 +202,28 @@ class PipeWireRecorder(Recorder):
                      f"source={source}", f"sink={MIX_SINK}"]
                 )))
 
-            info = self.runner.run(["pactl", "info"])
-            match = re.search(r"^Default Source: (.+)$", info, re.MULTILINE)
-            if match:
-                module_ids.append(int(self.runner.run(
-                    ["pactl", "load-module", "module-loopback",
-                     f"source={match.group(1).strip()}", f"sink={MIX_SINK}"]
-                )))
+            microphone_module_id = self._load_microphone() if microphone_enabled else None
+            if microphone_module_id is not None:
+                module_ids.append(microphone_module_id)
 
             state = RecordingState(
                 name=name, filename_base=base, date=day, pid=0,
                 module_ids=module_ids, segments=[],
                 started_at=now.isoformat(timespec="seconds"),
+                microphone_enabled=microphone_enabled,
+                microphone_module_id=microphone_module_id,
             )
             first = self._segment_path(state, 0)
             state.segments.append(str(first))
-            state.pid = self._spawn_capture(first)
+            try:
+                state.pid = self._spawn_capture(first)
+                self._wait_for_capture(first, state.pid)
+            except Exception:
+                if state.pid:
+                    self.runner.run(["kill", str(state.pid)])
+                self._teardown_modules(module_ids)
+                first.unlink(missing_ok=True)
+                raise
 
             save_state(state, self.state_path)
             return state
@@ -123,15 +234,72 @@ class PipeWireRecorder(Recorder):
             state = self.status()
             if not state:
                 raise RuntimeError("no active recording")
+            if state.paused or state.pid is None:
+                raise RuntimeError("recording is paused")
 
-            self.runner.run(["kill", str(state.pid)])
-            finished = state.segments[-1]
-
-            nxt = self._segment_path(state, len(state.segments))
-            state.segments.append(str(nxt))
-            state.pid = self._spawn_capture(nxt)
+            finished = Path(state.segments[-1])
+            self._stop_capture(finished, state.pid)
+            state.pid = None
+            state.paused = True
             save_state(state, self.state_path)
-            return finished
+            self._resume_capture(state)
+            return str(finished)
+
+    def pause(self) -> RecordingState:
+        with self._lock:
+            state = self.status()
+            if not state:
+                raise RuntimeError("no active recording")
+            if state.paused or state.pid is None:
+                raise RuntimeError("recording is already paused")
+            self._stop_capture(Path(state.segments[-1]), state.pid)
+            state.pid = None
+            state.paused = True
+            save_state(state, self.state_path)
+            return state
+
+    def resume(self) -> RecordingState:
+        with self._lock:
+            state = self.status()
+            if not state:
+                raise RuntimeError("no active recording")
+            if not state.paused:
+                raise RuntimeError("recording is not paused")
+            self._resume_capture(state)
+            return state
+
+    def set_microphone_enabled(self, enabled: bool) -> RecordingState:
+        with self._lock:
+            state = self.status()
+            if not state:
+                raise RuntimeError("no active recording")
+            if state.microphone_enabled == enabled:
+                return state
+
+            was_paused = state.paused
+            if not was_paused:
+                self._stop_capture(Path(state.segments[-1]), state.pid)
+                state.pid = None
+                state.paused = True
+                save_state(state, self.state_path)
+
+            if state.microphone_module_id is not None:
+                self.runner.run([
+                    "pactl", "unload-module", str(state.microphone_module_id)
+                ])
+                if state.microphone_module_id in state.module_ids:
+                    state.module_ids.remove(state.microphone_module_id)
+                state.microphone_module_id = None
+            if enabled:
+                state.microphone_module_id = self._load_microphone()
+                if state.microphone_module_id is not None:
+                    state.module_ids.append(state.microphone_module_id)
+            state.microphone_enabled = enabled
+            save_state(state, self.state_path)
+
+            if not was_paused:
+                self._resume_capture(state)
+            return state
 
     def stop(self) -> RecordingState:
         with self._lock:
@@ -139,9 +307,12 @@ class PipeWireRecorder(Recorder):
             if not state:
                 raise RuntimeError("no active recording")
 
-            self.runner.run(["kill", str(state.pid)])
-            self._teardown_modules(state.module_ids)
-            clear_state(self.state_path)
+            try:
+                if state.pid is not None:
+                    self._stop_capture(Path(state.segments[-1]), state.pid)
+            finally:
+                self._teardown_modules(state.module_ids)
+                clear_state(self.state_path)
             return state
 
     def status(self) -> RecordingState | None:
@@ -173,6 +344,7 @@ class PipeWireRecorder(Recorder):
                 stale = None
             if stale:
                 self._teardown_modules(stale.module_ids)
-                self.runner.run(["kill", str(stale.pid)])
+                if stale.pid is not None:
+                    self.runner.run(["kill", str(stale.pid)])
             clear_state(self.state_path)
             self._state_error = None

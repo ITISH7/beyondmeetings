@@ -46,3 +46,30 @@ def test_segment_paths_accumulate(tmp_path):
     state.segments.append("/data/recordings/2026-07-30/seg_001.wav")
     save_state(state, path)
     assert len(load_state(path).segments) == 2
+
+
+def test_old_recording_state_defaults_to_active_with_microphone(tmp_path):
+    """State files written before capture controls must remain loadable."""
+    path = tmp_path / "recording-state.json"
+    path.write_text(
+        '{"name":"Old","filename_base":"old","date":"2026-07-30",'
+        '"pid":42,"module_ids":[],"segments":[],"started_at":"2026-07-30T10:00:00"}'
+    )
+
+    state = load_state(path)
+
+    assert state.paused is False
+    assert state.microphone_enabled is True
+    assert state.pid == 42
+
+
+def test_paused_recording_state_accepts_no_capture_process():
+    state = RecordingState(
+        name="Paused", filename_base="paused", date="2026-07-30", pid=None,
+        segments=["/data/seg000.wav"], started_at="2026-07-30T10:00:00",
+        paused=True, microphone_enabled=False,
+    )
+
+    assert state.pid is None
+    assert state.paused is True
+    assert state.microphone_enabled is False

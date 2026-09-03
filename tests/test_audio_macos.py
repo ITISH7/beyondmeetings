@@ -18,15 +18,22 @@ class FakeRunner:
         self.commands = []
         self.mix_succeeds = mix_succeeds
         self._pid = 5000
+        self.running = {}
 
     def run(self, args) -> str:
         self.commands.append(args)
+        if args and args[0] == "kill":
+            self.running[int(args[-1])] = False
         return ""
 
     def spawn(self, args) -> int:
         self.commands.append(args)
         self._pid += 1
+        self.running[self._pid] = True
         return self._pid
+
+    def is_running(self, pid):
+        return self.running.get(pid, False)
 
     def succeeded(self, args) -> bool:
         self.commands.append(args)
@@ -90,6 +97,16 @@ def test_start_writes_the_two_streams_to_distinguishable_paths(tmp_path):
     assert system != mic
 
 
+def test_start_can_omit_the_microphone_output(tmp_path):
+    runner = FakeRunner()
+    state = _recorder(tmp_path, runner).start("Video", microphone_enabled=False)
+
+    spawned = runner.of("bmcapture")[0]
+    assert "--system" in spawned
+    assert "--mic" not in spawned
+    assert state.microphone_enabled is False
+
+
 def test_start_records_the_final_mixed_path_not_the_intermediates(tmp_path):
     """Everything downstream consumes state.segments; it must see one file."""
     state = _recorder(tmp_path).start("Standup")
@@ -121,7 +138,8 @@ def test_start_after_a_stale_recording_clears_it(tmp_path):
 def test_roll_segment_stops_the_helper_then_starts_the_next(tmp_path):
     runner = FakeRunner()
     recorder = _recorder(tmp_path, runner)
-    recorder.start("Long meeting")
+    state = recorder.start("Long meeting")
+    _capture(recorder, state, 0)
     runner.commands.clear()
 
     recorder.roll_segment()
@@ -148,7 +166,8 @@ def test_roll_segment_respawns_before_mixing(tmp_path):
 
 def test_roll_segment_returns_the_finished_mixed_path(tmp_path):
     recorder = _recorder(tmp_path)
-    recorder.start("Long meeting")
+    state = recorder.start("Long meeting")
+    _capture(recorder, state, 0)
 
     finished = recorder.roll_segment()
 
@@ -158,12 +177,139 @@ def test_roll_segment_returns_the_finished_mixed_path(tmp_path):
 
 def test_roll_segment_appends_the_next_segment_to_the_state(tmp_path):
     recorder = _recorder(tmp_path)
-    recorder.start("Long meeting")
+    state = recorder.start("Long meeting")
+    _capture(recorder, state, 0)
     recorder.roll_segment()
 
     segments = recorder.status().segments
     assert len(segments) == 2
     assert segments[1].endswith("_seg001.wav")
+
+
+def test_failed_rollover_restart_leaves_recording_paused_and_retryable(tmp_path):
+    class RolloverFailureRunner(FakeRunner):
+        def __init__(self):
+            super().__init__()
+            self.spawn_count = 0
+
+        def spawn(self, args):
+            self.spawn_count += 1
+            if self.spawn_count == 1:
+                return super().spawn(args)
+            self.commands.append(args)
+            raise RuntimeError("helper refused to start")
+
+    runner = RolloverFailureRunner()
+    recorder = _recorder(tmp_path, runner)
+    state = recorder.start("Long meeting")
+    _capture(recorder, state, 0)
+
+    with pytest.raises(RuntimeError, match="helper refused"):
+        recorder.roll_segment()
+
+    state = recorder.status()
+    assert state.paused is True
+    assert state.pid is None
+    assert len(state.segments) == 1
+
+    runner.spawn = FakeRunner.spawn.__get__(runner, RolloverFailureRunner)
+    resumed = recorder.resume()
+    assert resumed.paused is False
+    assert len(resumed.segments) == 2
+
+
+def test_pause_finalizes_capture_and_resume_uses_a_new_segment(tmp_path):
+    recorder = _recorder(tmp_path)
+    state = recorder.start("Video", microphone_enabled=False)
+    system, _ = recorder._intermediates(state, 0)
+    system.parent.mkdir(parents=True, exist_ok=True)
+    system.write_bytes(b"RIFF")
+
+    paused = recorder.pause()
+
+    assert paused.paused is True
+    assert paused.pid is None
+    resumed = recorder.resume()
+    assert resumed.paused is False
+    assert len(resumed.segments) == 2
+
+
+def test_pause_waits_for_helper_exit_before_mixing(tmp_path):
+    class SlowExitRunner(FakeRunner):
+        def __init__(self):
+            super().__init__()
+            self.kill_requested = set()
+            self.polls = 0
+
+        def run(self, args):
+            self.commands.append(args)
+            if args and args[0] == "kill":
+                self.kill_requested.add(int(args[-1]))
+            return ""
+
+        def is_running(self, pid):
+            if pid not in self.kill_requested:
+                return self.running.get(pid, False)
+            self.polls += 1
+            return self.polls < 3
+
+        def succeeded(self, args):
+            assert self.polls >= 3, "mixed before the helper finalized its WAVs"
+            return super().succeeded(args)
+
+    runner = SlowExitRunner()
+    recorder = _recorder(tmp_path, runner)
+    state = recorder.start("Video")
+    _capture(recorder, state)
+
+    recorder.pause()
+
+    assert runner.polls >= 3
+
+
+def test_pause_with_no_audio_reports_failure_and_keeps_recoverable_state(tmp_path):
+    recorder = _recorder(tmp_path)
+    recorder.start("Video")
+
+    with pytest.raises(RuntimeError, match="no usable audio"):
+        recorder.pause()
+
+    state = recorder.status()
+    assert state.paused is True
+    assert state.pid is None
+    assert len(state.segments) == 1
+
+
+def test_microphone_change_restarts_helper_with_new_mode(tmp_path):
+    runner = FakeRunner()
+    recorder = _recorder(tmp_path, runner)
+    state = recorder.start("Video")
+    _capture(recorder, state)
+    runner.commands.clear()
+
+    changed = recorder.set_microphone_enabled(False)
+
+    spawned = runner.of("bmcapture")[0]
+    assert "--mic" not in spawned
+    assert changed.microphone_enabled is False
+    assert len(changed.segments) == 2
+
+
+def test_stop_while_paused_does_not_kill_a_missing_process(tmp_path):
+    runner = FakeRunner()
+    recorder = _recorder(tmp_path, runner)
+    state = recorder.start("Video", microphone_enabled=False)
+    system, _ = recorder._intermediates(state, 0)
+    system.parent.mkdir(parents=True, exist_ok=True)
+    system.write_bytes(b"RIFF")
+    recorder.pause()
+    runner.commands.clear()
+
+    stopped = recorder.stop()
+
+    assert stopped.paused is True
+    assert not runner.of("kill")
+    assert recorder.status() is None
 
 
 # --- mixing ---
@@ -216,7 +362,8 @@ def test_a_failed_mix_keeps_the_intermediates(tmp_path):
     system.write_bytes(b"RIFF")
     mic.write_bytes(b"RIFF")
 
-    recorder.stop()
+    with pytest.raises(RuntimeError, match="mix"):
+        recorder.stop()
 
     assert system.exists() and mic.exists()
 
@@ -241,7 +388,8 @@ def test_a_missing_mic_stream_still_produces_a_segment(tmp_path):
 def test_stop_kills_the_helper(tmp_path):
     runner = FakeRunner()
     recorder = _recorder(tmp_path, runner)
-    recorder.start("Standup")
+    state = recorder.start("Standup")
+    _capture(recorder, state, 0)
     runner.commands.clear()
 
     recorder.stop()
@@ -256,7 +404,8 @@ def test_stop_without_a_recording_is_an_error(tmp_path):
 
 def test_stop_clears_the_state(tmp_path):
     recorder = _recorder(tmp_path)
-    recorder.start("Standup")
+    state = recorder.start("Standup")
+    _capture(recorder, state, 0)
     recorder.stop()
 
     assert recorder.status() is None

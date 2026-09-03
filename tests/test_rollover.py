@@ -4,13 +4,16 @@ from beyondmeetings.rollover import RolloverWorker
 
 
 class FakeRecorder:
-    def __init__(self, active=True):
+    def __init__(self, active=True, paused=False):
         self.rolled = []
         self.active = active
+        self.paused = paused
         self._counter = 0
 
     def status(self):
-        return object() if self.active else None
+        if not self.active:
+            return None
+        return type("State", (), {"paused": self.paused})()
 
     def roll_segment(self):
         path = f"/data/seg{self._counter:03d}.wav"
@@ -81,6 +84,31 @@ def test_does_nothing_when_not_recording():
     worker.mark_segment_start(START)
     worker.tick(START + timedelta(minutes=90))
     assert recorder.rolled == []
+
+
+def test_does_nothing_while_recording_is_paused():
+    recorder = FakeRecorder(paused=True)
+    worker = _worker(recorder, [])
+    worker.mark_segment_start(START)
+
+    worker.tick(START + timedelta(minutes=90))
+
+    assert recorder.rolled == []
+
+
+def test_pause_winning_between_status_and_roll_is_a_benign_no_op():
+    class PauseRaceRecorder(FakeRecorder):
+        def roll_segment(self):
+            self.paused = True
+            raise RuntimeError("recording is paused")
+
+    recorder = PauseRaceRecorder()
+    worker = _worker(recorder, [])
+    worker.mark_segment_start(START)
+
+    worker.tick(START + timedelta(minutes=90))
+
+    assert recorder.paused is True
 
 
 def test_tick_before_any_start_is_a_no_op():

@@ -31,12 +31,22 @@ class RolloverWorker:
     def tick(self, now: datetime) -> None:
         if self._segment_started is None:
             return
-        if self.recorder.status() is None:
+        state = self.recorder.status()
+        if state is None or state.paused:
             return
         if now - self._segment_started < self.interval:
             return
 
-        finished = self.recorder.roll_segment()
+        try:
+            finished = self.recorder.roll_segment()
+        except RuntimeError:
+            # Pause can win after the status check but before roll_segment()
+            # acquires the backend lock. That expected transition is not a
+            # segmentation failure and must not alarm the user.
+            current = self.recorder.status()
+            if current is not None and current.paused:
+                return
+            raise
         self._segment_started = now
 
         # A transcription failure must not end segmentation for the rest of the
